@@ -188,21 +188,24 @@ func _layout() -> void:
 	var cell_from_h := floorf((vp.y - margin * 2.0 - title_gap - frame_outer * 2.0) / (float(ROWS) + title_cells))
 	cell_size = clampf(minf(cell_from_w, cell_from_h), MIN_CELL, MAX_CELL)
 	# Shrink until the measured title + board stack actually fits the viewport.
+	var title_ascent := 0.0
+	var title_descent := 0.0
+	var stack_h := 0.0
 	while cell_size > MIN_CELL:
 		_apply_cell_metrics()
-		var title_ascent := title_font.get_ascent(title_size)
-		var title_descent := title_font.get_descent(title_size)
-		var stack_h := title_ascent + title_descent + title_gap + frame_outer * 2.0 + ROWS * cell_size
+		title_ascent = title_font.get_ascent(title_size)
+		title_descent = title_font.get_descent(title_size)
+		stack_h = title_ascent + title_descent + title_gap + frame_outer * 2.0 + ROWS * cell_size
 		var stack_w := COLS * cell_size + hold_w + side_w + side_gap * 2.0
 		if stack_h <= vp.y - margin * 2.0 and stack_w <= vp.x - margin * 2.0:
 			break
 		cell_size -= 1.0
 	_apply_cell_metrics()
-	var title_ascent := title_font.get_ascent(title_size)
-	var title_descent := title_font.get_descent(title_size)
+	title_ascent = title_font.get_ascent(title_size)
+	title_descent = title_font.get_descent(title_size)
 	var board_w := COLS * cell_size
 	var board_h := ROWS * cell_size
-	var stack_h := title_ascent + title_descent + title_gap + frame_outer * 2.0 + board_h
+	stack_h = title_ascent + title_descent + title_gap + frame_outer * 2.0 + board_h
 	var stack_top := maxf(margin, (vp.y - stack_h) * 0.5)
 	board_origin = Vector2((vp.x - board_w) * 0.5, stack_top + title_ascent + title_descent + title_gap + frame_outer)
 	var title := "NEON STACK"
