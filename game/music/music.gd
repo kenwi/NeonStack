@@ -1,7 +1,7 @@
 extends Node2D
 
 ## Playlist, mute, and volume for the in-game soundtrack.
-## Track order is shuffled, then shuffled again after each full pass.
+## Track order is shuffled from the current time, then shuffled again after each full pass.
 
 const TRACK_FELL: AudioStreamMP3 = preload("res://game/music/happy_on_the_way_we_fell.mp3")
 const TRACK_STACK: AudioStreamMP3 = preload("res://game/music/neon_stack.mp3")
@@ -17,6 +17,7 @@ var _tracks: Array[Dictionary] = [
 	{"title": "Neon Tetris", "stream": TRACK_TETRIS},
 ]
 var _player := AudioStreamPlayer.new()
+var _rng := RandomNumberGenerator.new()
 var _index := 0
 var _volume_step := DEFAULT_STEP
 var _muted := false
@@ -31,7 +32,7 @@ func _ready() -> void:
 	_font = ThemeDB.fallback_font
 	_player.finished.connect(_on_finished)
 	add_child(_player)
-	_tracks.shuffle()
+	_shuffle_tracks()
 	_play(0, true)
 
 
@@ -87,13 +88,39 @@ func _advance() -> void:
 		_play(next, true)
 		return
 	var finished: Dictionary = _tracks[_index]
-	_tracks.shuffle()
+	_shuffle_tracks()
 	if _tracks.size() > 1 and _tracks[0] == finished:
-		var swap := randi_range(1, _tracks.size() - 1)
+		var swap := _rng.randi_range(1, _tracks.size() - 1)
 		var first: Dictionary = _tracks[0]
 		_tracks[0] = _tracks[swap]
 		_tracks[swap] = first
 	_play(0, true)
+
+
+func _shuffle_tracks() -> void:
+	# The web export's engine clock stays at zero, so the global shuffle repeats
+	# on every refresh. Seed from the wall clock, and from the browser clock on web.
+	_rng.seed = _time_seed()
+	for i in range(_tracks.size() - 1, 0, -1):
+		var j := _rng.randi_range(0, i)
+		if i == j:
+			continue
+		var swap: Dictionary = _tracks[i]
+		_tracks[i] = _tracks[j]
+		_tracks[j] = swap
+
+
+func _time_seed() -> int:
+	var mixed := int(Time.get_unix_time_from_system() * 1_000_000.0) ^ Time.get_ticks_usec()
+	if OS.has_feature("web"):
+		var stamp = JavaScriptBridge.eval(
+			"(Date.now() * 1000) ^ Math.floor(Math.random() * 4294967296)",
+			false
+		)
+		if stamp != null:
+			mixed ^= int(stamp)
+	# Nearby seeds produce similar shuffles. Hash so each refresh diverges.
+	return hash(mixed)
 
 
 func _play(index: int, announce: bool) -> void:
