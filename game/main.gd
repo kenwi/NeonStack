@@ -31,6 +31,9 @@ const HELP_KEYS := [
 	["Down", "Soft drop"],
 	["Space / Enter", "Hard drop"],
 	["C / Shift", "Hold"],
+	["M", "Mute music"],
+	["N", "Next track"],
+	["PgUp / PgDn", "Music volume"],
 	["Esc", "Pause"],
 	["F / F11", "Fullscreen"],
 	["Q", "Quit"],
@@ -142,6 +145,9 @@ var title_pos := Vector2.ZERO
 var hint_pos := Vector2.ZERO
 var title_font: Font
 var body_font: Font
+
+# The scene already owns this node. Preloading its script from here cycles the load.
+@onready var music = $Music
 
 
 func _board_size() -> Vector2:
@@ -526,6 +532,9 @@ func _quit_game() -> void:
 
 
 func _input(event: InputEvent) -> void:
+	if music != null and music.handle_input(event):
+		get_viewport().set_input_as_handled()
+		return
 	if _key_pressed(event, KEY_H):
 		help_open = not help_open
 		if help_open:
