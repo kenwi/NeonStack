@@ -1,0 +1,8 @@
+# Godot 4+ specific ignores
+.godot/
+/android/
+
+# Local tooling (not part of the game)
+addons/
+.cursor/
+.mcp.json
