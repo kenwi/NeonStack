@@ -28,7 +28,7 @@ const HELP_KEYS := [
 	["Up / X", "Rotate"],
 	["Z", "Counter-rotate"],
 	["Down", "Soft drop"],
-	["Space", "Hard drop"],
+	["Space / Enter", "Hard drop"],
 	["C / Shift", "Hold"],
 	["Esc", "Pause"],
 	["F / F11", "Fullscreen"],
@@ -325,6 +325,8 @@ func _grounded() -> bool:
 
 
 func _hard_drop() -> void:
+	if clear_timer > 0.0 or game_over or paused:
+		return
 	var dist := 0
 	while _try_move(0, 1):
 		dist += 1
@@ -333,6 +335,8 @@ func _hard_drop() -> void:
 
 
 func _lock_piece() -> void:
+	if clear_timer > 0.0:
+		return
 	for c in _cells(piece_id, piece_rot, piece_pos):
 		if c.y < 0:
 			game_over = true
@@ -361,15 +365,20 @@ func _begin_line_clear() -> void:
 
 func _finish_line_clear() -> void:
 	var cleared := clear_flash.size()
+	# Remove bottom-to-top first (keeps lower indices stable), then add empty
+	# rows. Interleaving push_front with remove_at shifts indices and leaves
+	# the upper cleared row(s) on the board for doubles/triples/tetrises.
 	clear_flash.sort()
 	clear_flash.reverse()
 	for y in clear_flash:
 		board.remove_at(y)
+	for _i in cleared:
 		var row: Array = []
 		row.resize(COLS)
 		row.fill("")
 		board.push_front(row)
 	clear_flash.clear()
+	clear_timer = 0.0
 	lines_cleared += cleared
 	score += SCORE_TABLE[cleared] * level
 	level = mini(15, 1 + int(lines_cleared / 10.0))
@@ -378,7 +387,7 @@ func _finish_line_clear() -> void:
 
 
 func _hold() -> void:
-	if hold_locked or game_over or paused:
+	if hold_locked or game_over or paused or clear_timer > 0.0:
 		return
 	hold_locked = true
 	if hold_id == "":
@@ -486,6 +495,19 @@ func _toggle_fullscreen() -> void:
 	)
 
 
+func _quit_game() -> void:
+	if OS.has_feature("web"):
+		# Browsers only allow close for script-opened windows; try anyway, then
+		# blank the tab so a blocked close still leaves the page.
+		JavaScriptBridge.eval(
+			"(function(){try{window.open('','_self');window.close();}catch(e){}"
+			+ "document.documentElement.innerHTML='';"
+			+ "window.location.replace('about:blank');})();",
+			true
+		)
+	get_tree().quit()
+
+
 func _input(event: InputEvent) -> void:
 	if _key_pressed(event, KEY_H):
 		help_open = not help_open
@@ -497,7 +519,7 @@ func _input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		return
 	if _key_pressed(event, KEY_Q):
-		get_tree().quit()
+		_quit_game()
 		get_viewport().set_input_as_handled()
 		return
 	if event.is_action_pressed("ui_cancel"):
@@ -507,9 +529,9 @@ func _input(event: InputEvent) -> void:
 			or DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN:
 			DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
 		elif game_over:
-			get_tree().quit()
+			_quit_game()
 		elif paused:
-			get_tree().quit()
+			_quit_game()
 		else:
 			paused = true
 		queue_redraw()
@@ -529,13 +551,21 @@ func _input(event: InputEvent) -> void:
 			queue_redraw()
 			get_viewport().set_input_as_handled()
 		return
+	# Line-clear flash owns the board; ignore play input until rows are removed.
+	if clear_timer > 0.0:
+		get_viewport().set_input_as_handled()
+		return
 	if event.is_action_pressed("ui_up") or _key_pressed(event, KEY_X):
 		_try_rotate(1)
 		get_viewport().set_input_as_handled()
 	elif _key_pressed(event, KEY_Z):
 		_try_rotate(-1)
 		get_viewport().set_input_as_handled()
-	elif _key_pressed(event, KEY_SPACE):
+	elif (
+		_key_pressed(event, KEY_SPACE)
+		or _key_pressed(event, KEY_ENTER)
+		or _key_pressed(event, KEY_KP_ENTER)
+	):
 		_hard_drop()
 		get_viewport().set_input_as_handled()
 	elif _key_pressed(event, KEY_C) or _key_pressed(event, KEY_SHIFT):
@@ -609,11 +639,18 @@ func _draw_ghost() -> void:
 	if gy == piece_pos.y:
 		return
 	var col: Color = COLORS[piece_id]
-	col.a = 0.22
+	# Outline-only so empty stack gaps stay obvious (filled ghosts look like locked blocks).
+	var edge := Color(col, 0.55)
+	var fill := Color(col, 0.08)
 	for c in _cells(piece_id, piece_rot, Vector2i(piece_pos.x, gy)):
 		if c.y < 0:
 			continue
-		_draw_block(c, col, 0.55)
+		var size := cell_size - GAP * 2.0
+		var inset := (cell_size - size) * 0.5
+		var pos := board_origin + Vector2(c.x * cell_size + inset, c.y * cell_size + inset)
+		var rect := Rect2(pos, Vector2(size, size))
+		draw_rect(rect, fill, true, -1.0, true)
+		draw_rect(rect, edge, false, 2.0, true)
 
 
 func _draw_block(cell: Vector2i, color: Color, scale_mul: float) -> void:
