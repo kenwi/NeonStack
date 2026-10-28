@@ -1,6 +1,8 @@
 # Godot 4+ specific ignores
 .godot/
 /android/
+/build/
+export_presets.cfg.secret
 
 # Local tooling (not part of the game)
 addons/
