@@ -31,6 +31,7 @@ const HELP_KEYS := [
 	["Space", "Hard drop"],
 	["C / Shift", "Hold"],
 	["Esc", "Pause"],
+	["F / F11", "Fullscreen"],
 	["Q", "Quit"],
 	["H", "Toggle this help"],
 ]
@@ -146,21 +147,7 @@ func _ready() -> void:
 	get_viewport().size_changed.connect(_layout)
 
 
-func _layout() -> void:
-	if title_font == null or body_font == null:
-		return
-	var vp := get_viewport_rect().size
-	var margin := UI_MARGIN
-	var frame_outer := float(FRAME_PAD)
-	var title_gap := 8.0
-	# Fit the board using both axes so wide or tall windows grow the playfield
-	# instead of leaving a small fixed board floating in empty space.
-	var width_cells := float(COLS) + HOLD_W_CELLS + SIDE_W_CELLS + SIDE_GAP_CELLS * 2.0
-	var cell_from_w := floorf((vp.x - margin * 2.0) / width_cells)
-	# Title scales with cell size, so fold it into the height budget.
-	var title_cells := float(TITLE_SIZE_BASE) / REF_CELL
-	var cell_from_h := floorf((vp.y - margin * 2.0 - title_gap - frame_outer * 2.0) / (float(ROWS) + title_cells))
-	cell_size = clampf(minf(cell_from_w, cell_from_h), MIN_CELL, MAX_CELL)
+func _apply_cell_metrics() -> void:
 	ui_scale = cell_size / REF_CELL
 	hold_w = HOLD_W_CELLS * cell_size
 	hold_h = HOLD_H_CELLS * cell_size
@@ -173,28 +160,53 @@ func _layout() -> void:
 	hint_size = maxi(12, int(round(HINT_SIZE_BASE * ui_scale)))
 	help_title_size = maxi(18, int(round(HELP_TITLE_SIZE_BASE * ui_scale)))
 	help_row_size = maxi(14, int(round(HELP_ROW_SIZE_BASE * ui_scale)))
+
+
+func _layout() -> void:
+	if title_font == null or body_font == null:
+		return
+	var vp := get_viewport_rect().size
+	var margin := UI_MARGIN
+	# Include the outer glow so the frame is never clipped by the window edge.
+	var frame_outer := float(FRAME_PAD) + 3.0
+	var title_gap := 8.0
+	var width_cells := float(COLS) + HOLD_W_CELLS + SIDE_W_CELLS + SIDE_GAP_CELLS * 2.0
+	var cell_from_w := floorf((vp.x - margin * 2.0) / width_cells)
+	var title_cells := float(TITLE_SIZE_BASE) / REF_CELL
+	var cell_from_h := floorf((vp.y - margin * 2.0 - title_gap - frame_outer * 2.0) / (float(ROWS) + title_cells))
+	cell_size = clampf(minf(cell_from_w, cell_from_h), MIN_CELL, MAX_CELL)
+	# Shrink until the measured title + board stack actually fits the viewport.
+	while cell_size > MIN_CELL:
+		_apply_cell_metrics()
+		var title_ascent := title_font.get_ascent(title_size)
+		var title_descent := title_font.get_descent(title_size)
+		var stack_h := title_ascent + title_descent + title_gap + frame_outer * 2.0 + ROWS * cell_size
+		var stack_w := COLS * cell_size + hold_w + side_w + side_gap * 2.0
+		if stack_h <= vp.y - margin * 2.0 and stack_w <= vp.x - margin * 2.0:
+			break
+		cell_size -= 1.0
+	_apply_cell_metrics()
 	var title_ascent := title_font.get_ascent(title_size)
 	var title_descent := title_font.get_descent(title_size)
 	var board_w := COLS * cell_size
 	var board_h := ROWS * cell_size
-	var stack_h := title_ascent + title_descent + title_gap + frame_outer + board_h + frame_outer
+	var stack_h := title_ascent + title_descent + title_gap + frame_outer * 2.0 + board_h
 	var stack_top := maxf(margin, (vp.y - stack_h) * 0.5)
 	board_origin = Vector2((vp.x - board_w) * 0.5, stack_top + title_ascent + title_descent + title_gap + frame_outer)
 	var title := "NEON STACK"
 	var title_w := title_font.get_string_size(title, HORIZONTAL_ALIGNMENT_LEFT, -1, title_size).x
 	title_pos = Vector2(
 		board_origin.x + (board_w - title_w) * 0.5,
-		board_origin.y - FRAME_PAD - title_gap - title_descent
+		board_origin.y - frame_outer - title_gap - title_descent
 	)
 	hint_pos = Vector2(
 		board_origin.x - side_gap - hold_w,
-		maxf(margin, board_origin.y - FRAME_PAD - 3.0) - (body_font.get_descent(hint_size) + 6.0)
+		maxf(margin, board_origin.y - frame_outer) - (body_font.get_descent(hint_size) + 6.0)
 	)
-	# Keep the hint on-screen if the HOLD column sits near the top edge.
 	hint_pos.y = clampf(
 		hint_pos.y,
 		margin + body_font.get_ascent(hint_size),
-		board_origin.y - FRAME_PAD - 8.0
+		board_origin.y - frame_outer - 8.0
 	)
 	queue_redraw()
 
@@ -463,10 +475,25 @@ func _key_pressed(event: InputEvent, code: Key) -> bool:
 	return key.keycode == code or key.physical_keycode == code
 
 
+func _toggle_fullscreen() -> void:
+	var mode := DisplayServer.window_get_mode()
+	var fullscreen := (
+		mode == DisplayServer.WINDOW_MODE_FULLSCREEN
+		or mode == DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN
+	)
+	DisplayServer.window_set_mode(
+		DisplayServer.WINDOW_MODE_WINDOWED if fullscreen else DisplayServer.WINDOW_MODE_FULLSCREEN
+	)
+
+
 func _input(event: InputEvent) -> void:
 	if _key_pressed(event, KEY_H):
 		help_open = not help_open
 		queue_redraw()
+		get_viewport().set_input_as_handled()
+		return
+	if _key_pressed(event, KEY_F) or _key_pressed(event, KEY_F11):
+		_toggle_fullscreen()
 		get_viewport().set_input_as_handled()
 		return
 	if _key_pressed(event, KEY_Q):
@@ -476,6 +503,9 @@ func _input(event: InputEvent) -> void:
 	if event.is_action_pressed("ui_cancel"):
 		if help_open:
 			help_open = false
+		elif DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_FULLSCREEN \
+			or DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN:
+			DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
 		elif game_over:
 			get_tree().quit()
 		elif paused:
