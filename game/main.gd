@@ -34,6 +34,17 @@ const HELP_KEYS := [
 	["F / F11", "Fullscreen"],
 	["Q", "Quit"],
 	["H", "Toggle this help"],
+	["S", "Score table"],
+]
+const SCORE_HELP_ROWS := [
+	["Soft drop", "+1 per cell"],
+	["Hard drop", "+2 per cell"],
+	["1 line", "100 × level"],
+	["2 lines", "300 × level"],
+	["3 lines", "500 × level"],
+	["4 lines", "800 × level"],
+	["Level up", "Every 10 lines (max 15)"],
+	["Holding a piece", "No points"],
 ]
 
 const PIECES := {
@@ -99,6 +110,7 @@ var level := 1
 var game_over := false
 var paused := false
 var help_open := false
+var score_open := false
 
 var drop_timer := 0.0
 var lock_timer := 0.0
@@ -228,6 +240,7 @@ func _new_game() -> void:
 	game_over = false
 	paused = false
 	help_open = false
+	score_open = false
 	clear_flash.clear()
 	clear_timer = 0.0
 	lock_timer = 0.0
@@ -419,7 +432,7 @@ func _drop_interval() -> float:
 
 func _process(delta: float) -> void:
 	pulse += delta
-	if game_over or paused or help_open:
+	if game_over or paused or help_open or score_open:
 		queue_redraw()
 		return
 	if clear_timer > 0.0:
@@ -511,6 +524,15 @@ func _quit_game() -> void:
 func _input(event: InputEvent) -> void:
 	if _key_pressed(event, KEY_H):
 		help_open = not help_open
+		if help_open:
+			score_open = false
+		queue_redraw()
+		get_viewport().set_input_as_handled()
+		return
+	if _key_pressed(event, KEY_S):
+		score_open = not score_open
+		if score_open:
+			help_open = false
 		queue_redraw()
 		get_viewport().set_input_as_handled()
 		return
@@ -523,8 +545,9 @@ func _input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		return
 	if event.is_action_pressed("ui_cancel"):
-		if help_open:
+		if help_open or score_open:
 			help_open = false
+			score_open = false
 		elif DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_FULLSCREEN \
 			or DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN:
 			DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
@@ -537,11 +560,15 @@ func _input(event: InputEvent) -> void:
 		queue_redraw()
 		get_viewport().set_input_as_handled()
 		return
-	if help_open:
+	if help_open or score_open:
 		get_viewport().set_input_as_handled()
 		return
 	if game_over:
-		if event.is_pressed():
+		if (
+			_key_pressed(event, KEY_SPACE)
+			or _key_pressed(event, KEY_ENTER)
+			or _key_pressed(event, KEY_KP_ENTER)
+		):
 			_new_game()
 			get_viewport().set_input_as_handled()
 		return
@@ -639,18 +666,11 @@ func _draw_ghost() -> void:
 	if gy == piece_pos.y:
 		return
 	var col: Color = COLORS[piece_id]
-	# Outline-only so empty stack gaps stay obvious (filled ghosts look like locked blocks).
-	var edge := Color(col, 0.55)
-	var fill := Color(col, 0.08)
+	col.a = 0.22
 	for c in _cells(piece_id, piece_rot, Vector2i(piece_pos.x, gy)):
 		if c.y < 0:
 			continue
-		var size := cell_size - GAP * 2.0
-		var inset := (cell_size - size) * 0.5
-		var pos := board_origin + Vector2(c.x * cell_size + inset, c.y * cell_size + inset)
-		var rect := Rect2(pos, Vector2(size, size))
-		draw_rect(rect, fill, true, -1.0, true)
-		draw_rect(rect, edge, false, 2.0, true)
+		_draw_block(c, col, 0.55)
 
 
 func _draw_block(cell: Vector2i, color: Color, scale_mul: float) -> void:
@@ -722,21 +742,50 @@ func _draw_side_panels() -> void:
 	for i in mini(3, queue.size()):
 		_draw_mini(next.position + Vector2(side_w * 0.5, next_slot * (0.85 + i)), queue[i], mini_next)
 	_draw_panel(stats, "STATS", label_size)
-	var lines := [
-		"SCORE  %d" % score,
-		"LINES  %d" % lines_cleared,
-		"LEVEL  %d" % level,
+	# Label left / value right-aligned so large scores grow inward, not past the border.
+	var stat_rows := [
+		["SCORE", str(score)],
+		["LINES", str(lines_cleared)],
+		["LEVEL", str(level)],
 	]
 	var stats_size := maxi(14, int(round(18.0 * ui_scale)))
 	var stats_step := maxf(24.0, 34.0 * ui_scale)
-	for i in lines.size():
+	var pad_x := 14.0 * ui_scale
+	var text_w := stats.size.x - pad_x * 2.0
+	var gap := 10.0 * ui_scale
+	# One shared size for all rows so SCORE/LINES/LEVEL stay visually consistent.
+	var row_size := stats_size
+	while row_size > 10:
+		var fits := true
+		for row in stat_rows:
+			var label_w := body_font.get_string_size(row[0], HORIZONTAL_ALIGNMENT_LEFT, -1, row_size).x
+			var value_w := body_font.get_string_size(row[1], HORIZONTAL_ALIGNMENT_LEFT, -1, row_size).x
+			if label_w + gap + value_w > text_w:
+				fits = false
+				break
+		if fits:
+			break
+		row_size -= 1
+	for i in stat_rows.size():
+		var y := stats.position.y + 48.0 * ui_scale + i * stats_step
+		var label: String = stat_rows[i][0]
+		var value: String = stat_rows[i][1]
 		draw_string(
 			body_font,
-			stats.position + Vector2(14.0 * ui_scale, 48.0 * ui_scale + i * stats_step),
-			lines[i],
+			Vector2(stats.position.x + pad_x, y),
+			label,
 			HORIZONTAL_ALIGNMENT_LEFT,
 			-1,
-			stats_size,
+			row_size,
+			Color("e8f7ff")
+		)
+		draw_string(
+			body_font,
+			Vector2(stats.position.x + pad_x, y),
+			value,
+			HORIZONTAL_ALIGNMENT_RIGHT,
+			text_w,
+			row_size,
 			Color("e8f7ff")
 		)
 
@@ -751,29 +800,25 @@ func _draw_centered_label(center: Vector2, text: String, font: Font, size: int, 
 	draw_string(font, Vector2(center.x - width * 0.5, center.y + y_offset), text, HORIZONTAL_ALIGNMENT_LEFT, -1, size, color)
 
 
-func _draw_help_table(vp: Vector2) -> void:
+func _draw_info_table(vp: Vector2, title: String, rows: Array, footer: String) -> void:
 	draw_rect(Rect2(Vector2.ZERO, vp), Color(0, 0, 0, 0.62))
-	var key_w := 0.0
-	var action_w := 0.0
-	for row in HELP_KEYS:
-		var key := str(row[0])
-		var action := str(row[1])
-		key_w = maxf(key_w, body_font.get_string_size(key, HORIZONTAL_ALIGNMENT_LEFT, -1, help_row_size).x)
-		action_w = maxf(action_w, body_font.get_string_size(action, HORIZONTAL_ALIGNMENT_LEFT, -1, help_row_size).x)
+	var left_w := 0.0
+	var right_w := 0.0
+	for row in rows:
+		left_w = maxf(left_w, body_font.get_string_size(str(row[0]), HORIZONTAL_ALIGNMENT_LEFT, -1, help_row_size).x)
+		right_w = maxf(right_w, body_font.get_string_size(str(row[1]), HORIZONTAL_ALIGNMENT_LEFT, -1, help_row_size).x)
 	var col_gap := 40.0 * ui_scale
 	var pad_x := 32.0 * ui_scale
 	var pad_top := 26.0 * ui_scale
 	var pad_bottom := 28.0 * ui_scale
 	var title_h := title_font.get_ascent(help_title_size) + title_font.get_descent(help_title_size)
 	var row_h := body_font.get_ascent(help_row_size) + body_font.get_descent(help_row_size) + 14.0 * ui_scale
-	var footer := "H or Esc to close"
 	var footer_h := body_font.get_ascent(hint_size) + body_font.get_descent(hint_size) + 10.0 * ui_scale
-	var content_w := key_w + col_gap + action_w
-	var title := "CONTROLS"
+	var content_w := left_w + col_gap + right_w
 	var title_w := title_font.get_string_size(title, HORIZONTAL_ALIGNMENT_LEFT, -1, help_title_size).x
 	var footer_w := body_font.get_string_size(footer, HORIZONTAL_ALIGNMENT_LEFT, -1, hint_size).x
 	var panel_w := maxf(pad_x * 2.0 + content_w, maxf(title_w, footer_w) + pad_x * 2.0)
-	var panel_h := pad_top + title_h + 18.0 * ui_scale + row_h * HELP_KEYS.size() + footer_h + pad_bottom
+	var panel_h := pad_top + title_h + 18.0 * ui_scale + row_h * rows.size() + footer_h + pad_bottom
 	var center := _board_center()
 	var panel := Rect2(center - Vector2(panel_w, panel_h) * 0.5, Vector2(panel_w, panel_h))
 	draw_rect(panel, Color("0b1a28", 0.96), true, -1.0, true)
@@ -794,14 +839,14 @@ func _draw_help_table(vp: Vector2) -> void:
 		Color("8ef7ff", 0.28),
 		1.0
 	)
-	var table_w := key_w + col_gap + action_w
-	var key_x := panel.position.x + (panel_w - table_w) * 0.5
-	var action_x := key_x + key_w + col_gap
+	var table_w := left_w + col_gap + right_w
+	var left_x := panel.position.x + (panel_w - table_w) * 0.5
+	var right_x := left_x + left_w + col_gap
 	var row_y := divider_y + 8.0 * ui_scale + body_font.get_ascent(help_row_size)
-	for i in HELP_KEYS.size():
-		var row: Array = HELP_KEYS[i]
-		var key := str(row[0])
-		var action := str(row[1])
+	for i in rows.size():
+		var row: Array = rows[i]
+		var left := str(row[0])
+		var right := str(row[1])
 		var y := row_y + i * row_h
 		if i % 2 == 1:
 			draw_rect(
@@ -811,8 +856,8 @@ func _draw_help_table(vp: Vector2) -> void:
 				-1.0,
 				true
 			)
-		draw_string(body_font, Vector2(key_x, y), key, HORIZONTAL_ALIGNMENT_LEFT, -1, help_row_size, Color("8ef7ff"))
-		draw_string(body_font, Vector2(action_x, y), action, HORIZONTAL_ALIGNMENT_LEFT, -1, help_row_size, Color("e8f7ff"))
+		draw_string(body_font, Vector2(left_x, y), left, HORIZONTAL_ALIGNMENT_LEFT, -1, help_row_size, Color("8ef7ff"))
+		draw_string(body_font, Vector2(right_x, y), right, HORIZONTAL_ALIGNMENT_LEFT, -1, help_row_size, Color("e8f7ff"))
 	var footer_y := panel.end.y - pad_bottom + body_font.get_ascent(hint_size) - footer_h + 8.0 * ui_scale
 	draw_string(
 		body_font,
@@ -826,8 +871,11 @@ func _draw_help_table(vp: Vector2) -> void:
 
 
 func _draw_overlays(vp: Vector2) -> void:
+	if score_open:
+		_draw_info_table(vp, "SCORE", SCORE_HELP_ROWS, "S or Esc to close")
+		return
 	if help_open:
-		_draw_help_table(vp)
+		_draw_info_table(vp, "CONTROLS", HELP_KEYS, "H or Esc to close")
 		return
 	var center := _board_center()
 	if paused:
@@ -837,4 +885,4 @@ func _draw_overlays(vp: Vector2) -> void:
 	if game_over:
 		draw_rect(Rect2(Vector2.ZERO, vp), Color(0, 0, 0, 0.62))
 		_draw_centered_label(center, "STACK FULL", title_font, 42, Color("fb7185"), -36.0)
-		_draw_centered_label(center, "Any key restart    Esc / Q quit", body_font, 20, Color("e8f7ff"), 18.0)
+		_draw_centered_label(center, "Space / Enter restart    Esc / Q quit", body_font, 20, Color("e8f7ff"), 18.0)
