@@ -677,19 +677,45 @@ func _draw_block(cell: Vector2i, color: Color, scale_mul: float) -> void:
 	var size := (cell_size - GAP * 2.0) * scale_mul
 	var inset := (cell_size - size) * 0.5
 	var pos := board_origin + Vector2(cell.x * cell_size + inset, cell.y * cell_size + inset)
-	var rect := Rect2(pos, Vector2(size, size))
+	_draw_block_rect(Rect2(pos, Vector2(size, size)), color)
+
+
+func _draw_block_rect(rect: Rect2, color: Color) -> void:
+	var s := minf(rect.size.x, rect.size.y)
+	var glow_pad := maxf(1.5, s * 0.09)
+	var edge := maxf(1.5, s * 0.12)
+	var bar := maxf(1.5, s * 0.12)
 	var glow := color.lightened(0.15)
 	glow.a = color.a * 0.35
-	draw_rect(rect.grow(3.0), glow, true, -1.0, true)
+	draw_rect(rect.grow(glow_pad), glow, true, -1.0, true)
 	draw_rect(rect, color, true, -1.0, true)
 	var hi := color.lightened(0.45)
 	hi.a = color.a * 0.85
-	draw_rect(Rect2(rect.position + Vector2(2, 2), Vector2(rect.size.x * 0.42, 4.0)), hi, true, -1.0, true)
-	draw_rect(Rect2(rect.position + Vector2(2, 2), Vector2(4.0, rect.size.y * 0.42)), hi, true, -1.0, true)
+	draw_rect(Rect2(rect.position + Vector2(edge, edge), Vector2(rect.size.x * 0.42, bar)), hi, true, -1.0, true)
+	draw_rect(Rect2(rect.position + Vector2(edge, edge), Vector2(bar, rect.size.y * 0.42)), hi, true, -1.0, true)
 	var shade := color.darkened(0.35)
 	shade.a = color.a * 0.7
-	draw_rect(Rect2(rect.position + Vector2(rect.size.x - 5.0, 6.0), Vector2(3.0, rect.size.y - 8.0)), shade, true, -1.0, true)
-	draw_rect(Rect2(rect.position + Vector2(6.0, rect.size.y - 5.0), Vector2(rect.size.x - 8.0, 3.0)), shade, true, -1.0, true)
+	var shade_inset := edge * 1.5
+	draw_rect(
+		Rect2(
+			rect.position + Vector2(rect.size.x - edge - bar, shade_inset),
+			Vector2(bar, maxf(1.0, rect.size.y - shade_inset * 2.0))
+		),
+		shade,
+		true,
+		-1.0,
+		true
+	)
+	draw_rect(
+		Rect2(
+			rect.position + Vector2(shade_inset, rect.size.y - edge - bar),
+			Vector2(maxf(1.0, rect.size.x - shade_inset * 2.0), bar)
+		),
+		shade,
+		true,
+		-1.0,
+		true
+	)
 
 
 func _draw_mini(origin: Vector2, pid: String, cell: float) -> void:
@@ -706,9 +732,11 @@ func _draw_mini(origin: Vector2, pid: String, cell: float) -> void:
 	var h := (max_c.y - min_c.y + 1) * cell
 	var base := origin - Vector2(w, h) * 0.5
 	var col: Color = COLORS[pid]
+	var gap := maxf(1.0, cell * 0.08)
+	var block := cell - gap * 2.0
 	for c in shape:
-		var p := base + Vector2((c.x - min_c.x) * cell + 1.5, (c.y - min_c.y) * cell + 1.5)
-		draw_rect(Rect2(p, Vector2(cell - 3.0, cell - 3.0)), col, true, -1.0, true)
+		var p := base + Vector2((c.x - min_c.x) * cell + gap, (c.y - min_c.y) * cell + gap)
+		_draw_block_rect(Rect2(p, Vector2(block, block)), col)
 
 
 func _draw_panel(rect: Rect2, label: String, label_size: int = 18) -> void:
