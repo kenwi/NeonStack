@@ -2,6 +2,7 @@ extends Node2D
 
 ## Playlist, mute, and volume for the in-game soundtrack.
 
+const TRACK_FELL: AudioStreamMP3 = preload("res://game/music/happy_on_the_way_we_fell.mp3")
 const TRACK_STACK: AudioStreamMP3 = preload("res://game/music/neon_stack.mp3")
 const TRACK_TETRIS: AudioStreamMP3 = preload("res://game/music/neon_tetris.mp3")
 const VOLUME_STEPS := 10
@@ -10,6 +11,7 @@ const STATUS_TIME := 1.8
 const STATUS_FADE := 0.35
 
 var _tracks: Array[Dictionary] = [
+	{"title": "Happy on the Way We Fell", "stream": TRACK_FELL},
 	{"title": "Neon Stack", "stream": TRACK_STACK},
 	{"title": "Neon Tetris", "stream": TRACK_TETRIS},
 ]
