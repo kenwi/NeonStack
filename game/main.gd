@@ -14,9 +14,10 @@ const HOLD_W_CELLS := 3.75
 const HOLD_H_CELLS := 3.75
 const SIDE_W_CELLS := 3.75
 const NEXT_H_CELLS := 7.0
-const STATS_H_CELLS := 4.75
+const STATS_H_CELLS := 3.45
 const SIDE_GAP_CELLS := 0.65
 const PANEL_GAP_CELLS := 0.45
+const PANEL_PAD_X := 12.0
 const UI_MARGIN := 12.0
 const TITLE_SIZE_BASE := 28
 const HINT_SIZE_BASE := 15
@@ -747,7 +748,7 @@ func _draw_panel(rect: Rect2, label: String, label_size: int = 18) -> void:
 	draw_rect(rect, Color("8ef7ff", 0.35), false, 1.5, true)
 	draw_string(
 		body_font,
-		rect.position + Vector2(12.0 * ui_scale, 22.0 * ui_scale),
+		rect.position + Vector2(PANEL_PAD_X * ui_scale, 22.0 * ui_scale),
 		label,
 		HORIZONTAL_ALIGNMENT_LEFT,
 		-1,
@@ -780,8 +781,9 @@ func _draw_side_panels() -> void:
 		["LEVEL", str(level)],
 	]
 	var stats_size := maxi(14, int(round(18.0 * ui_scale)))
-	var stats_step := maxf(24.0, 34.0 * ui_scale)
-	var pad_x := 14.0 * ui_scale
+	var stats_step := maxf(20.0, 28.0 * ui_scale)
+	var stats_top := 50.0 * ui_scale
+	var pad_x := PANEL_PAD_X * ui_scale
 	var text_w := stats.size.x - pad_x * 2.0
 	var gap := 10.0 * ui_scale
 	# One shared size for all rows so SCORE/LINES/LEVEL stay visually consistent.
@@ -798,7 +800,7 @@ func _draw_side_panels() -> void:
 			break
 		row_size -= 1
 	for i in stat_rows.size():
-		var y := stats.position.y + 48.0 * ui_scale + i * stats_step
+		var y := stats.position.y + stats_top + i * stats_step
 		var label: String = stat_rows[i][0]
 		var value: String = stat_rows[i][1]
 		draw_string(
