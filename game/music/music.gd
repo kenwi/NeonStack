@@ -1,6 +1,7 @@
 extends Node2D
 
 ## Playlist, mute, and volume for the in-game soundtrack.
+## Track order is shuffled, then shuffled again after each full pass.
 
 const TRACK_FELL: AudioStreamMP3 = preload("res://game/music/happy_on_the_way_we_fell.mp3")
 const TRACK_STACK: AudioStreamMP3 = preload("res://game/music/neon_stack.mp3")
@@ -30,6 +31,7 @@ func _ready() -> void:
 	_font = ThemeDB.fallback_font
 	_player.finished.connect(_on_finished)
 	add_child(_player)
+	_tracks.shuffle()
 	_play(0, true)
 
 
@@ -76,7 +78,22 @@ func _change_volume(direction: int) -> void:
 
 
 func _skip() -> void:
-	_play((_index + 1) % _tracks.size(), true)
+	_advance()
+
+
+func _advance() -> void:
+	var next := _index + 1
+	if next < _tracks.size():
+		_play(next, true)
+		return
+	var finished: Dictionary = _tracks[_index]
+	_tracks.shuffle()
+	if _tracks.size() > 1 and _tracks[0] == finished:
+		var swap := randi_range(1, _tracks.size() - 1)
+		var first: Dictionary = _tracks[0]
+		_tracks[0] = _tracks[swap]
+		_tracks[swap] = first
+	_play(0, true)
 
 
 func _play(index: int, announce: bool) -> void:
@@ -102,7 +119,7 @@ func _on_finished() -> void:
 	if Time.get_ticks_msec() - _play_started_msec < 400:
 		push_warning("Soundtrack ended immediately: %s" % str(_tracks[_index]["title"]))
 		return
-	_play((_index + 1) % _tracks.size(), true)
+	_advance()
 
 
 func _apply_volume() -> void:
