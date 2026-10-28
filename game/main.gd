@@ -4,22 +4,24 @@ extends Node2D
 
 const COLS := 10
 const ROWS := 20
-const CELL := 40.0
-const MIN_CELL := 26.0
+const REF_CELL := 36.0
+const MIN_CELL := 18.0
+const MAX_CELL := 72.0
 const GAP := 2.0
 const FRAME_PAD := 14.0
-const HOLD_W := 150.0
-const HOLD_H := 150.0
-const SIDE_W := 150.0
-const NEXT_H := 280.0
-const STATS_H := 190.0
-const SIDE_GAP := 24.0
-const PANEL_GAP := 16.0
+## Side panel sizes as multiples of the live cell size.
+const HOLD_W_CELLS := 3.75
+const HOLD_H_CELLS := 3.75
+const SIDE_W_CELLS := 3.75
+const NEXT_H_CELLS := 7.0
+const STATS_H_CELLS := 4.75
+const SIDE_GAP_CELLS := 0.65
+const PANEL_GAP_CELLS := 0.45
 const UI_MARGIN := 12.0
-const TITLE_SIZE := 28
-const HINT_SIZE := 15
-const HELP_TITLE_SIZE := 28
-const HELP_ROW_SIZE := 18
+const TITLE_SIZE_BASE := 28
+const HINT_SIZE_BASE := 15
+const HELP_TITLE_SIZE_BASE := 28
+const HELP_ROW_SIZE_BASE := 18
 const HELP_HINT := "Press H for controls"
 const HELP_KEYS := [
 	["Left / Right", "Move"],
@@ -109,7 +111,19 @@ var clear_timer := 0.0
 var pulse := 0.0
 
 var board_origin := Vector2.ZERO
-var cell_size := CELL
+var cell_size := REF_CELL
+var ui_scale := 1.0
+var hold_w := HOLD_W_CELLS * REF_CELL
+var hold_h := HOLD_H_CELLS * REF_CELL
+var side_w := SIDE_W_CELLS * REF_CELL
+var next_h := NEXT_H_CELLS * REF_CELL
+var stats_h := STATS_H_CELLS * REF_CELL
+var side_gap := SIDE_GAP_CELLS * REF_CELL
+var panel_gap := PANEL_GAP_CELLS * REF_CELL
+var title_size := TITLE_SIZE_BASE
+var hint_size := HINT_SIZE_BASE
+var help_title_size := HELP_TITLE_SIZE_BASE
+var help_row_size := HELP_ROW_SIZE_BASE
 var title_pos := Vector2.ZERO
 var hint_pos := Vector2.ZERO
 var title_font: Font
@@ -136,29 +150,51 @@ func _layout() -> void:
 	if title_font == null or body_font == null:
 		return
 	var vp := get_viewport_rect().size
-	var title_ascent := title_font.get_ascent(TITLE_SIZE)
-	var title_descent := title_font.get_descent(TITLE_SIZE)
+	var margin := UI_MARGIN
 	var frame_outer := float(FRAME_PAD)
 	var title_gap := 8.0
-	var chrome := UI_MARGIN + title_ascent + title_descent + title_gap + frame_outer * 2.0 + UI_MARGIN
-	cell_size = clampf(floorf((vp.y - chrome) / float(ROWS)), MIN_CELL, CELL)
+	# Fit the board using both axes so wide or tall windows grow the playfield
+	# instead of leaving a small fixed board floating in empty space.
+	var width_cells := float(COLS) + HOLD_W_CELLS + SIDE_W_CELLS + SIDE_GAP_CELLS * 2.0
+	var cell_from_w := floorf((vp.x - margin * 2.0) / width_cells)
+	# Title scales with cell size, so fold it into the height budget.
+	var title_cells := float(TITLE_SIZE_BASE) / REF_CELL
+	var cell_from_h := floorf((vp.y - margin * 2.0 - title_gap - frame_outer * 2.0) / (float(ROWS) + title_cells))
+	cell_size = clampf(minf(cell_from_w, cell_from_h), MIN_CELL, MAX_CELL)
+	ui_scale = cell_size / REF_CELL
+	hold_w = HOLD_W_CELLS * cell_size
+	hold_h = HOLD_H_CELLS * cell_size
+	side_w = SIDE_W_CELLS * cell_size
+	next_h = NEXT_H_CELLS * cell_size
+	stats_h = STATS_H_CELLS * cell_size
+	side_gap = SIDE_GAP_CELLS * cell_size
+	panel_gap = PANEL_GAP_CELLS * cell_size
+	title_size = maxi(18, int(round(TITLE_SIZE_BASE * ui_scale)))
+	hint_size = maxi(12, int(round(HINT_SIZE_BASE * ui_scale)))
+	help_title_size = maxi(18, int(round(HELP_TITLE_SIZE_BASE * ui_scale)))
+	help_row_size = maxi(14, int(round(HELP_ROW_SIZE_BASE * ui_scale)))
+	var title_ascent := title_font.get_ascent(title_size)
+	var title_descent := title_font.get_descent(title_size)
 	var board_w := COLS * cell_size
 	var board_h := ROWS * cell_size
-	# Top-align the title + board; leftover vertical space stays under the playfield.
-	var stack_top := UI_MARGIN
-	var board_y := stack_top + title_ascent + title_descent + title_gap + frame_outer
-	board_origin = Vector2((vp.x - board_w) * 0.5, board_y)
+	var stack_h := title_ascent + title_descent + title_gap + frame_outer + board_h + frame_outer
+	var stack_top := maxf(margin, (vp.y - stack_h) * 0.5)
+	board_origin = Vector2((vp.x - board_w) * 0.5, stack_top + title_ascent + title_descent + title_gap + frame_outer)
 	var title := "NEON STACK"
-	var title_w := title_font.get_string_size(title, HORIZONTAL_ALIGNMENT_LEFT, -1, TITLE_SIZE).x
+	var title_w := title_font.get_string_size(title, HORIZONTAL_ALIGNMENT_LEFT, -1, title_size).x
 	title_pos = Vector2(
 		board_origin.x + (board_w - title_w) * 0.5,
 		board_origin.y - FRAME_PAD - title_gap - title_descent
 	)
-	# Keep the hint in the upper-left gutter, anchored to the HOLD column so it
-	# stays fully on-screen and lines up with the side UI.
 	hint_pos = Vector2(
-		board_origin.x - SIDE_GAP - HOLD_W,
-		UI_MARGIN + body_font.get_ascent(HINT_SIZE)
+		board_origin.x - side_gap - hold_w,
+		maxf(margin, board_origin.y - FRAME_PAD - 3.0) - (body_font.get_descent(hint_size) + 6.0)
+	)
+	# Keep the hint on-screen if the HOLD column sits near the top edge.
+	hint_pos.y = clampf(
+		hint_pos.y,
+		margin + body_font.get_ascent(hint_size),
+		board_origin.y - FRAME_PAD - 8.0
 	)
 	queue_redraw()
 
@@ -588,38 +624,59 @@ func _draw_mini(origin: Vector2, pid: String, cell: float) -> void:
 		draw_rect(Rect2(p, Vector2(cell - 3.0, cell - 3.0)), col, true, -1.0, true)
 
 
-func _draw_panel(rect: Rect2, label: String) -> void:
+func _draw_panel(rect: Rect2, label: String, label_size: int = 18) -> void:
 	draw_rect(rect, Color("0b1a28", 0.92), true, -1.0, true)
 	draw_rect(rect, Color("8ef7ff", 0.35), false, 1.5, true)
-	draw_string(body_font, rect.position + Vector2(14, 28), label, HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color("8ef7ff"))
+	draw_string(
+		body_font,
+		rect.position + Vector2(12.0 * ui_scale, 22.0 * ui_scale),
+		label,
+		HORIZONTAL_ALIGNMENT_LEFT,
+		-1,
+		label_size,
+		Color("8ef7ff")
+	)
 
 
 func _draw_side_panels() -> void:
 	var board_w := COLS * cell_size
 	# Align side panels with the outermost board border (frame + glow).
 	var panel_top := board_origin.y - FRAME_PAD - 3.0
-	var hold := Rect2(Vector2(board_origin.x - SIDE_GAP - HOLD_W, panel_top), Vector2(HOLD_W, HOLD_H))
-	var next := Rect2(Vector2(board_origin.x + board_w + SIDE_GAP, panel_top), Vector2(SIDE_W, NEXT_H))
-	var stats := Rect2(Vector2(next.position.x, next.end.y + PANEL_GAP), Vector2(SIDE_W, STATS_H))
-	_draw_panel(hold, "HOLD")
-	_draw_mini(hold.get_center() + Vector2(0, 18), hold_id, 22.0)
-	_draw_panel(next, "NEXT")
+	var hold := Rect2(Vector2(board_origin.x - side_gap - hold_w, panel_top), Vector2(hold_w, hold_h))
+	var next := Rect2(Vector2(board_origin.x + board_w + side_gap, panel_top), Vector2(side_w, next_h))
+	var stats := Rect2(Vector2(next.position.x, next.end.y + panel_gap), Vector2(side_w, stats_h))
+	var label_size := maxi(14, int(round(18.0 * ui_scale)))
+	var mini_hold := maxf(14.0, cell_size * 0.6)
+	var mini_next := maxf(12.0, cell_size * 0.55)
+	var next_slot := next_h / 3.5
+	_draw_panel(hold, "HOLD", label_size)
+	_draw_mini(hold.get_center() + Vector2(0, 10.0 * ui_scale), hold_id, mini_hold)
+	_draw_panel(next, "NEXT", label_size)
 	for i in mini(3, queue.size()):
-		_draw_mini(next.position + Vector2(SIDE_W * 0.5, 70 + i * 70), queue[i], 20.0)
-	_draw_panel(stats, "STATS")
+		_draw_mini(next.position + Vector2(side_w * 0.5, next_slot * (0.85 + i)), queue[i], mini_next)
+	_draw_panel(stats, "STATS", label_size)
 	var lines := [
 		"SCORE  %d" % score,
 		"LINES  %d" % lines_cleared,
 		"LEVEL  %d" % level,
 	]
+	var stats_size := maxi(14, int(round(18.0 * ui_scale)))
+	var stats_step := maxf(24.0, 34.0 * ui_scale)
 	for i in lines.size():
-		draw_string(body_font, stats.position + Vector2(14, 62 + i * 34), lines[i], HORIZONTAL_ALIGNMENT_LEFT, -1, 18, Color("e8f7ff"))
+		draw_string(
+			body_font,
+			stats.position + Vector2(14.0 * ui_scale, 48.0 * ui_scale + i * stats_step),
+			lines[i],
+			HORIZONTAL_ALIGNMENT_LEFT,
+			-1,
+			stats_size,
+			Color("e8f7ff")
+		)
 
 
 func _draw_hud() -> void:
-	draw_string(title_font, title_pos, "NEON STACK", HORIZONTAL_ALIGNMENT_LEFT, -1, TITLE_SIZE, Color("8ef7ff"))
-	# Draw hint after side panels so it stays readable in the upper-left gutter.
-	draw_string(body_font, hint_pos, HELP_HINT, HORIZONTAL_ALIGNMENT_LEFT, -1, HINT_SIZE, Color("8ef7ff", 0.72))
+	draw_string(title_font, title_pos, "NEON STACK", HORIZONTAL_ALIGNMENT_LEFT, -1, title_size, Color("8ef7ff"))
+	draw_string(body_font, hint_pos, HELP_HINT, HORIZONTAL_ALIGNMENT_LEFT, -1, hint_size, Color("8ef7ff", 0.72))
 
 
 func _draw_centered_label(center: Vector2, text: String, font: Font, size: int, color: Color, y_offset: float = 0.0) -> void:
@@ -634,36 +691,36 @@ func _draw_help_table(vp: Vector2) -> void:
 	for row in HELP_KEYS:
 		var key := str(row[0])
 		var action := str(row[1])
-		key_w = maxf(key_w, body_font.get_string_size(key, HORIZONTAL_ALIGNMENT_LEFT, -1, HELP_ROW_SIZE).x)
-		action_w = maxf(action_w, body_font.get_string_size(action, HORIZONTAL_ALIGNMENT_LEFT, -1, HELP_ROW_SIZE).x)
-	var col_gap := 40.0
-	var pad_x := 32.0
-	var pad_top := 26.0
-	var pad_bottom := 28.0
-	var title_h := title_font.get_ascent(HELP_TITLE_SIZE) + title_font.get_descent(HELP_TITLE_SIZE)
-	var row_h := body_font.get_ascent(HELP_ROW_SIZE) + body_font.get_descent(HELP_ROW_SIZE) + 14.0
+		key_w = maxf(key_w, body_font.get_string_size(key, HORIZONTAL_ALIGNMENT_LEFT, -1, help_row_size).x)
+		action_w = maxf(action_w, body_font.get_string_size(action, HORIZONTAL_ALIGNMENT_LEFT, -1, help_row_size).x)
+	var col_gap := 40.0 * ui_scale
+	var pad_x := 32.0 * ui_scale
+	var pad_top := 26.0 * ui_scale
+	var pad_bottom := 28.0 * ui_scale
+	var title_h := title_font.get_ascent(help_title_size) + title_font.get_descent(help_title_size)
+	var row_h := body_font.get_ascent(help_row_size) + body_font.get_descent(help_row_size) + 14.0 * ui_scale
 	var footer := "H or Esc to close"
-	var footer_h := body_font.get_ascent(HINT_SIZE) + body_font.get_descent(HINT_SIZE) + 10.0
+	var footer_h := body_font.get_ascent(hint_size) + body_font.get_descent(hint_size) + 10.0 * ui_scale
 	var content_w := key_w + col_gap + action_w
 	var title := "CONTROLS"
-	var title_w := title_font.get_string_size(title, HORIZONTAL_ALIGNMENT_LEFT, -1, HELP_TITLE_SIZE).x
-	var footer_w := body_font.get_string_size(footer, HORIZONTAL_ALIGNMENT_LEFT, -1, HINT_SIZE).x
+	var title_w := title_font.get_string_size(title, HORIZONTAL_ALIGNMENT_LEFT, -1, help_title_size).x
+	var footer_w := body_font.get_string_size(footer, HORIZONTAL_ALIGNMENT_LEFT, -1, hint_size).x
 	var panel_w := maxf(pad_x * 2.0 + content_w, maxf(title_w, footer_w) + pad_x * 2.0)
-	var panel_h := pad_top + title_h + 18.0 + row_h * HELP_KEYS.size() + footer_h + pad_bottom
+	var panel_h := pad_top + title_h + 18.0 * ui_scale + row_h * HELP_KEYS.size() + footer_h + pad_bottom
 	var center := _board_center()
 	var panel := Rect2(center - Vector2(panel_w, panel_h) * 0.5, Vector2(panel_w, panel_h))
 	draw_rect(panel, Color("0b1a28", 0.96), true, -1.0, true)
 	draw_rect(panel, Color("8ef7ff", 0.45), false, 1.5, true)
 	draw_string(
 		title_font,
-		Vector2(panel.position.x + (panel_w - title_w) * 0.5, panel.position.y + pad_top + title_font.get_ascent(HELP_TITLE_SIZE)),
+		Vector2(panel.position.x + (panel_w - title_w) * 0.5, panel.position.y + pad_top + title_font.get_ascent(help_title_size)),
 		title,
 		HORIZONTAL_ALIGNMENT_LEFT,
 		-1,
-		HELP_TITLE_SIZE,
+		help_title_size,
 		Color("8ef7ff")
 	)
-	var divider_y := panel.position.y + pad_top + title_h + 10.0
+	var divider_y := panel.position.y + pad_top + title_h + 10.0 * ui_scale
 	draw_line(
 		Vector2(panel.position.x + pad_x, divider_y),
 		Vector2(panel.end.x - pad_x, divider_y),
@@ -673,7 +730,7 @@ func _draw_help_table(vp: Vector2) -> void:
 	var table_w := key_w + col_gap + action_w
 	var key_x := panel.position.x + (panel_w - table_w) * 0.5
 	var action_x := key_x + key_w + col_gap
-	var row_y := divider_y + 8.0 + body_font.get_ascent(HELP_ROW_SIZE)
+	var row_y := divider_y + 8.0 * ui_scale + body_font.get_ascent(help_row_size)
 	for i in HELP_KEYS.size():
 		var row: Array = HELP_KEYS[i]
 		var key := str(row[0])
@@ -681,22 +738,22 @@ func _draw_help_table(vp: Vector2) -> void:
 		var y := row_y + i * row_h
 		if i % 2 == 1:
 			draw_rect(
-				Rect2(Vector2(panel.position.x + 10.0, y - body_font.get_ascent(HELP_ROW_SIZE) - 4.0), Vector2(panel_w - 20.0, row_h - 2.0)),
+				Rect2(Vector2(panel.position.x + 10.0, y - body_font.get_ascent(help_row_size) - 4.0), Vector2(panel_w - 20.0, row_h - 2.0)),
 				Color("123047", 0.35),
 				true,
 				-1.0,
 				true
 			)
-		draw_string(body_font, Vector2(key_x, y), key, HORIZONTAL_ALIGNMENT_LEFT, -1, HELP_ROW_SIZE, Color("8ef7ff"))
-		draw_string(body_font, Vector2(action_x, y), action, HORIZONTAL_ALIGNMENT_LEFT, -1, HELP_ROW_SIZE, Color("e8f7ff"))
-	var footer_y := panel.end.y - pad_bottom + body_font.get_ascent(HINT_SIZE) - footer_h + 8.0
+		draw_string(body_font, Vector2(key_x, y), key, HORIZONTAL_ALIGNMENT_LEFT, -1, help_row_size, Color("8ef7ff"))
+		draw_string(body_font, Vector2(action_x, y), action, HORIZONTAL_ALIGNMENT_LEFT, -1, help_row_size, Color("e8f7ff"))
+	var footer_y := panel.end.y - pad_bottom + body_font.get_ascent(hint_size) - footer_h + 8.0 * ui_scale
 	draw_string(
 		body_font,
 		Vector2(panel.position.x + (panel_w - footer_w) * 0.5, footer_y),
 		footer,
 		HORIZONTAL_ALIGNMENT_LEFT,
 		-1,
-		HINT_SIZE,
+		hint_size,
 		Color("6a8799")
 	)
 

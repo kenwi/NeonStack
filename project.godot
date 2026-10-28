@@ -20,8 +20,9 @@ config/icon="res://icon.svg"
 
 window/size/viewport_width=1280
 window/size/viewport_height=800
-window/stretch/mode="canvas_items"
-window/stretch/aspect="expand"
+; Disabled so the game viewport matches the window/canvas pixel size and
+; _layout() can grow the board to fill wide or tall browser windows.
+window/stretch/mode="disabled"
 
 [physics]
 
