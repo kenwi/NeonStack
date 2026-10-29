@@ -458,8 +458,17 @@ func _draw_zone_guides() -> void:
 		["ROT", Vector2(mid.x * 0.5, mid.y + mid.y * 0.5)],
 		["DROP", Vector2(mid.x + mid.x * 0.5, mid.y + mid.y * 0.5)],
 	]
-	var size := 18
-	var tint := Color("8ef7ff", 0.45)
+	# Fit the longest label into about half a quadrant so the guides read from arm's length.
+	var max_w := mid.x * 0.55
+	var max_h := mid.y * 0.4
+	var size := clampi(int(minf(max_w * 0.55, max_h)), 48, 160)
+	while size > 48:
+		var drop_w := _font.get_string_size("DROP", HORIZONTAL_ALIGNMENT_LEFT, -1, size).x
+		var drop_h := _font.get_ascent(size) + _font.get_descent(size)
+		if drop_w <= max_w and drop_h <= max_h:
+			break
+		size -= 2
+	var tint := Color("8ef7ff", 0.5)
 	for entry in labels:
 		var text := str(entry[0])
 		var center: Vector2 = entry[1]
