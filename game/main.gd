@@ -35,6 +35,7 @@ const HELP_KEYS := [
 	["N", "Next track"],
 	["PgUp / PgDn", "Music volume"],
 	["Esc", "Pause"],
+	["R", "Restart"],
 	["F / F11", "Fullscreen"],
 	["Q", "Quit"],
 	["H", "Toggle this help"],
@@ -255,6 +256,11 @@ func _new_game() -> void:
 	clear_timer = 0.0
 	lock_timer = 0.0
 	lock_resets = 0
+	drop_timer = 0.0
+	das_timer = 0.0
+	arr_timer = 0.0
+	soft_timer = 0.0
+	move_held = 0
 	_spawn_next()
 	queue_redraw()
 
@@ -555,6 +561,10 @@ func _input(event: InputEvent) -> void:
 		return
 	if _key_pressed(event, KEY_Q):
 		_quit_game()
+		get_viewport().set_input_as_handled()
+		return
+	if _key_pressed(event, KEY_R):
+		_new_game()
 		get_viewport().set_input_as_handled()
 		return
 	if event.is_action_pressed("ui_cancel"):
@@ -927,4 +937,4 @@ func _draw_overlays(vp: Vector2) -> void:
 	if game_over:
 		draw_rect(Rect2(Vector2.ZERO, vp), Color(0, 0, 0, 0.62))
 		_draw_centered_label(center, "STACK FULL", title_font, 42, Color("fb7185"), -36.0)
-		_draw_centered_label(center, "Space / Enter restart    Esc / Q quit", body_font, 20, Color("e8f7ff"), 18.0)
+		_draw_centered_label(center, "R / Space / Enter restart    Esc / Q quit", body_font, 20, Color("e8f7ff"), 18.0)
