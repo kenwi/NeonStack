@@ -50,23 +50,28 @@ func _ready() -> void:
 	_name_edit.visible = false
 	_name_edit.max_length = HighscoreConfig.MAX_PLAYER_NAME_LENGTH
 	_name_edit.caret_blink = true
+	_name_edit.caret_blink_interval = 0.45
 	_name_edit.alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_name_edit.context_menu_enabled = false
 	_name_edit.virtual_keyboard_enabled = true
 	_name_edit.virtual_keyboard_show_on_focus = true
 	_name_edit.mouse_filter = Control.MOUSE_FILTER_STOP
+	_name_edit.placeholder_text = "Your name"
 	var field := StyleBoxFlat.new()
 	field.bg_color = Color("071018")
-	field.border_color = Color("8ef7ff", 0.55)
-	field.set_border_width_all(1)
+	field.border_color = Color("8ef7ff", 0.85)
+	field.set_border_width_all(2)
 	field.set_corner_radius_all(4)
-	field.content_margin_left = 8.0
-	field.content_margin_right = 8.0
+	field.content_margin_left = 10.0
+	field.content_margin_right = 10.0
+	field.content_margin_top = 6.0
+	field.content_margin_bottom = 6.0
 	_name_edit.add_theme_stylebox_override("normal", field)
 	_name_edit.add_theme_stylebox_override("focus", field)
 	_name_edit.add_theme_color_override("font_color", Color("ffd166"))
 	_name_edit.add_theme_color_override("font_placeholder_color", Color("6a8799"))
-	_name_edit.add_theme_color_override("caret_color", Color("ffd166"))
+	_name_edit.add_theme_color_override("caret_color", Color("8ef7ff"))
+	_name_edit.add_theme_constant_override("caret_width", 3)
 	_name_edit.text_changed.connect(_on_name_text_changed)
 	_name_edit.text_submitted.connect(_on_name_submitted)
 	add_child(_name_edit)
@@ -191,15 +196,21 @@ func _handle_name_entry(event: InputEvent) -> bool:
 		if key.keycode == KEY_BACKSPACE:
 			if player_name.length() > 0:
 				player_name = player_name.substr(0, player_name.length() - 1)
-				queue_redraw()
+				_wake_name_cursor()
 			return true
 		var ch := char(key.unicode)
 		if key.unicode >= 32 and _is_allowed_name_char(ch):
 			if player_name.length() < HighscoreConfig.MAX_PLAYER_NAME_LENGTH:
 				player_name += ch
-				queue_redraw()
+				_wake_name_cursor()
 			return true
 	return true
+
+
+func _wake_name_cursor() -> void:
+	name_cursor_on = true
+	cursor_timer = 0.0
+	queue_redraw()
 
 
 func _is_allowed_name_char(ch: String) -> bool:
@@ -290,7 +301,9 @@ func _process(delta: float) -> void:
 		_name_edit.position = _name_field_rect.position
 		_name_edit.size = _name_field_rect.size
 		_name_edit.add_theme_font_size_override("font_size", maxi(14, int(round(18.0 * _ui_scale))))
-	if phase != Phase.NAME_ENTRY or PlayDevice.is_touch_primary():
+		if phase == Phase.NAME_ENTRY and not _name_edit.has_focus():
+			_name_edit.grab_focus()
+	if phase != Phase.NAME_ENTRY:
 		return
 	cursor_timer += delta
 	if cursor_timer >= 0.45:
@@ -325,17 +338,42 @@ func _draw_name_panel(vp: Vector2) -> void:
 	y += 42.0 * ui_scale
 	_draw_centered(_body_font, Vector2(cx, y), "Score %d" % pending_score, body_size, Color("e8f7ff"))
 	if touch_ui and phase == Phase.NAME_ENTRY:
+		_draw_name_field_chrome(_name_field_rect, true)
 		_draw_choice(_submit_rect, "SUBMIT", true)
 		_draw_choice(_skip_rect, "SKIP", false)
 		return
-	y += 36.0 * ui_scale
+	y += 28.0 * ui_scale
+	var field := _name_field_rect
+	if field.size.x <= 0.0:
+		var field_w := panel.size.x - 40.0 * ui_scale
+		var field_h := 44.0 * ui_scale
+		field = Rect2(panel.position.x + 20.0 * ui_scale, y, field_w, field_h)
+	_draw_name_field_chrome(field, phase == Phase.NAME_ENTRY)
 	var display := player_name
-	if name_cursor_on and phase == Phase.NAME_ENTRY:
-		display += "|"
-	elif phase == Phase.SUBMITTING:
+	if phase == Phase.SUBMITTING:
 		display = HighscoreChecksum.sanitize_player_name(player_name)
-	_draw_centered(_body_font, Vector2(cx, y), display if not display.is_empty() else "|", body_size, Color("ffd166"))
-	y += 40.0 * ui_scale
+	var text_size := maxi(14, int(round(18.0 * ui_scale)))
+	var text_color := Color("ffd166")
+	if display.is_empty() and phase == Phase.NAME_ENTRY:
+		display = "Your name"
+		text_color = Color("6a8799")
+	var text_w := _body_font.get_string_size(display, HORIZONTAL_ALIGNMENT_LEFT, -1, text_size).x
+	var text_baseline := field.position.y + (field.size.y + _body_font.get_ascent(text_size) - _body_font.get_descent(text_size)) * 0.5
+	var text_x := field.get_center().x - text_w * 0.5
+	draw_string(_body_font, Vector2(text_x, text_baseline), display, HORIZONTAL_ALIGNMENT_LEFT, -1, text_size, text_color)
+	if phase == Phase.NAME_ENTRY and name_cursor_on:
+		var caret_x := text_x + text_w
+		if player_name.is_empty():
+			caret_x = field.get_center().x
+		var caret_h := minf(field.size.y - 12.0 * ui_scale, float(text_size) + 8.0 * ui_scale)
+		var caret := Rect2(
+			caret_x + 2.0 * ui_scale,
+			field.get_center().y - caret_h * 0.5,
+			maxi(3.0, 3.0 * ui_scale),
+			caret_h
+		)
+		draw_rect(caret, Color("8ef7ff"), true, -1.0, true)
+	y = field.end.y + 28.0 * ui_scale
 	var hint := "Enter submit    Esc skip"
 	if phase == Phase.SUBMITTING:
 		hint = status_text if not status_text.is_empty() else "Submitting..."
@@ -607,8 +645,16 @@ func _layout_name_targets(vp: Vector2) -> Rect2:
 	_name_field_rect = Rect2()
 	if not touch_ui:
 		var desktop_w := mini(420.0 * ui_scale, vp.x - 40.0)
-		var desktop_h := 210.0 * ui_scale
-		return Rect2((vp.x - desktop_w) * 0.5, (vp.y - desktop_h) * 0.5 + 36.0 * ui_scale, desktop_w, desktop_h)
+		var desktop_h := 230.0 * ui_scale
+		var panel := Rect2((vp.x - desktop_w) * 0.5, (vp.y - desktop_h) * 0.5 + 36.0 * ui_scale, desktop_w, desktop_h)
+		var field_h := 44.0 * ui_scale
+		_name_field_rect = Rect2(
+			panel.position.x + 20.0 * ui_scale,
+			panel.position.y + 110.0 * ui_scale,
+			panel.size.x - 40.0 * ui_scale,
+			field_h
+		)
+		return panel
 	var panel_w := mini(maxf(420.0 * ui_scale, 300.0), vp.x - 16.0)
 	var panel_h := minf(maxf(250.0, 210.0 * ui_scale), vp.y - 16.0)
 	var panel := Rect2((vp.x - panel_w) * 0.5, maxf(8.0, (vp.y - panel_h) * 0.35), panel_w, panel_h)
@@ -618,8 +664,26 @@ func _layout_name_targets(vp: Vector2) -> Rect2:
 	var button_y := panel.end.y - button_h - 12.0
 	_skip_rect = Rect2(panel.position.x + 12.0, button_y, button_w, button_h)
 	_submit_rect = Rect2(_skip_rect.end.x + gap, button_y, button_w, button_h)
-	_name_field_rect = Rect2(panel.position.x + 20.0, button_y - 56.0, panel.size.x - 40.0, 40.0)
+	_name_field_rect = Rect2(panel.position.x + 20.0, button_y - 56.0, panel.size.x - 40.0, 44.0)
 	return panel
+
+
+func _draw_name_field_chrome(field: Rect2, active: bool) -> void:
+	if field.size.x <= 0.0:
+		return
+	var fill := Color("071018", 0.98)
+	var border := Color("8ef7ff", 0.95) if active else Color("8ef7ff", 0.45)
+	draw_rect(field, fill, true, -1.0, true)
+	draw_rect(field, border, false, maxf(2.0, 2.0 * _ui_scale), true)
+	if active and name_cursor_on:
+		# Outer pulse so the active field is easy to spot behind the keyboard.
+		draw_rect(
+			field.grow(3.0 * _ui_scale),
+			Color("8ef7ff", 0.22),
+			false,
+			maxf(1.0, 1.5 * _ui_scale),
+			true
+		)
 
 
 func _layout_leaderboard(vp: Vector2) -> Rect2:
@@ -689,6 +753,7 @@ func _on_name_text_changed(value: String) -> void:
 		_name_edit.caret_column = mini(caret, filtered.length())
 		_editing_name = false
 	player_name = filtered
+	_wake_name_cursor()
 
 
 func _on_name_submitted(_value: String) -> void:
@@ -703,7 +768,9 @@ func _show_touch_keyboard() -> void:
 	_name_edit.visible = true
 	_name_edit.position = _name_field_rect.position
 	_name_edit.size = _name_field_rect.size
+	_name_edit.caret_column = player_name.length()
 	_name_edit.grab_focus()
+	_wake_name_cursor()
 	DisplayServer.virtual_keyboard_show(
 		player_name,
 		_name_field_rect,
