@@ -22,7 +22,7 @@ const HOLD_ACTIONS := {
 	"down": "ui_down",
 }
 const TAP_ACTIONS := ["rot", "ccw", "drop", "hold"]
-const UTILITY := ["pause", "help", "scores", "restart", "mute", "scale_down", "scale_up"]
+const UTILITY := ["pause", "help", "scores", "restart", "mute", "zones", "scale_down", "scale_up"]
 const LABELS := {
 	"left": "<",
 	"right": ">",
@@ -36,6 +36,7 @@ const LABELS := {
 	"scores": "SCORES",
 	"restart": "RESTART",
 	"mute": "MUTE",
+	"zones": "ZONES",
 }
 
 var _font: Font
@@ -43,13 +44,14 @@ var _fingers: Dictionary = {}
 var _hold_counts := {"ui_left": 0, "ui_right": 0, "ui_down": 0}
 var _rects: Dictionary = {}
 var _scale := SCALE_DEFAULT
+var _show_zones := false
 var _metric_key := ""
 var _metric: Dictionary = {}
 
 
 func _ready() -> void:
 	_font = ThemeDB.fallback_font
-	_load_scale()
+	_load_prefs()
 
 
 func reserves_layout() -> bool:
@@ -196,6 +198,10 @@ func _on_press(id: String) -> void:
 		var music := main.get_node_or_null("Music")
 		if music != null:
 			music.toggle_mute()
+	elif id == "zones":
+		_show_zones = not _show_zones
+		_save_prefs()
+		queue_redraw()
 	elif id == "scale_down":
 		_set_scale(_scale - 1)
 	elif id == "scale_up":
@@ -266,23 +272,26 @@ func _set_scale(next: int) -> void:
 		return
 	_scale = next
 	_metric_key = ""
-	_save_scale()
+	_save_prefs()
 	var main := get_parent()
 	if main != null and main.has_method("_layout"):
 		main._layout()
 	queue_redraw()
 
 
-func _load_scale() -> void:
+func _load_prefs() -> void:
 	var cfg := ConfigFile.new()
 	if cfg.load(CONFIG_PATH) != OK:
 		return
 	_scale = clampi(int(cfg.get_value("ui", "scale", SCALE_DEFAULT)), SCALE_MIN, SCALE_MAX)
+	_show_zones = bool(cfg.get_value("ui", "show_zones", false))
 
 
-func _save_scale() -> void:
+func _save_prefs() -> void:
 	var cfg := ConfigFile.new()
+	cfg.load(CONFIG_PATH)
 	cfg.set_value("ui", "scale", _scale)
+	cfg.set_value("ui", "show_zones", _show_zones)
 	cfg.save(CONFIG_PATH)
 
 
@@ -414,17 +423,51 @@ func _draw() -> void:
 	if not _controls_visible() or _font == null:
 		return
 	_rebuild_rects()
+	if _show_zones:
+		_draw_zone_guides()
 	var main := get_parent()
 	for id in _rects.keys():
 		var label := _button_label(str(id), main.paused)
 		var held := false
 		if HOLD_ACTIONS.has(id):
 			held = int(_hold_counts[str(HOLD_ACTIONS[id])]) > 0
+		elif id == "zones" and _show_zones:
+			held = true
 		elif id == "scale_down" and _scale == SCALE_MIN:
 			held = true
 		elif id == "scale_up" and _scale == SCALE_MAX:
 			held = true
 		_draw_button(_rects[id], label, held)
+
+
+func _draw_zone_guides() -> void:
+	var vp := get_viewport_rect().size
+	var mid := Vector2(vp.x * 0.5, vp.y * 0.5)
+	var line := Color("8ef7ff", 0.35)
+	draw_line(Vector2(mid.x, 0.0), Vector2(mid.x, vp.y), line, 2.0, true)
+	draw_line(Vector2(0.0, mid.y), Vector2(vp.x, mid.y), line, 2.0, true)
+	var labels := [
+		["<", Vector2(mid.x * 0.5, mid.y * 0.5)],
+		[">", Vector2(mid.x + mid.x * 0.5, mid.y * 0.5)],
+		["ROT", Vector2(mid.x * 0.5, mid.y + mid.y * 0.5)],
+		["DROP", Vector2(mid.x + mid.x * 0.5, mid.y + mid.y * 0.5)],
+	]
+	var size := 18
+	var tint := Color("8ef7ff", 0.45)
+	for entry in labels:
+		var text := str(entry[0])
+		var center: Vector2 = entry[1]
+		var text_w := _font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x
+		var baseline := center.y + (_font.get_ascent(size) - _font.get_descent(size)) * 0.5
+		draw_string(
+			_font,
+			Vector2(center.x - text_w * 0.5, baseline),
+			text,
+			HORIZONTAL_ALIGNMENT_LEFT,
+			-1,
+			size,
+			tint
+		)
 
 
 func _button_label(id: String, paused: bool) -> String:

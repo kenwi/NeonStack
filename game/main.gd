@@ -58,6 +58,7 @@ const HELP_TOUCH := [
 	["Drop", "Hard drop"],
 	["Hold", "Hold piece"],
 	["1x / 3x", "Button size"],
+	["Zones", "Show tap zones"],
 	["Pause", "Pause"],
 	["Restart", "Restart"],
 	["Scores", "Highscores"],
