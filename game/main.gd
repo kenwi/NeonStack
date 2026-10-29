@@ -47,12 +47,17 @@ const HELP_KEYS := [
 	["S", "Score table"],
 ]
 const HELP_TOUCH := [
+	["Upper left", "Move left"],
+	["Upper right", "Move right"],
+	["Lower left", "Rotate"],
+	["Lower right", "Hard drop"],
 	["Left / Right", "Move"],
 	["Down", "Soft drop"],
 	["Rotate", "Rotate"],
 	["Counter", "Counter-rotate"],
 	["Drop", "Hard drop"],
 	["Hold", "Hold piece"],
+	["1x / 3x", "Button size"],
 	["Pause", "Pause"],
 	["Restart", "Restart"],
 	["Scores", "Highscores"],
