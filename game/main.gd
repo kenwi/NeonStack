@@ -175,6 +175,9 @@ func _ready() -> void:
 	body_font = ThemeDB.fallback_font
 	_layout()
 	_new_game()
+	# Show controls before the first piece drops. Later restarts leave it closed.
+	help_open = true
+	queue_redraw()
 	get_viewport().size_changed.connect(_layout)
 
 
