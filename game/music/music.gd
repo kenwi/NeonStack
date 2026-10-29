@@ -66,6 +66,10 @@ func toggle_mute() -> void:
 	_toggle_mute()
 
 
+func skip_track() -> void:
+	_skip()
+
+
 func _toggle_mute() -> void:
 	_muted = not _muted
 	_apply_volume()

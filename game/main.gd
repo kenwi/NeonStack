@@ -64,6 +64,7 @@ const HELP_TOUCH := [
 	["Restart", "Restart"],
 	["Scores", "Highscores"],
 	["Mute", "Mute music"],
+	["Next", "Next track"],
 	["Help", "Toggle this help"],
 ]
 const SCORE_HELP_ROWS := [
@@ -203,8 +204,11 @@ func _ready() -> void:
 	body_font = ThemeDB.fallback_font
 	_layout()
 	_new_game()
-	# Show controls before the first piece drops. Later restarts leave it closed.
-	help_open = true
+	# Desktop: show keyboard controls before the first piece drops.
+	# Touch: skip that overlay so the close tap cannot also hard-drop the piece.
+	help_open = not PlayDevice.is_touch_primary()
+	if PlayDevice.is_touch_primary() and touch != null:
+		touch.suppress_play_taps(400)
 	queue_redraw()
 	get_viewport().size_changed.connect(_layout)
 
@@ -604,6 +608,9 @@ func _help_rows() -> Array:
 
 
 func _handle_touch_overlay(event: InputEvent) -> bool:
+	# Ghost mouse clicks after a finger tap must not close and then also play.
+	if PlayDevice.is_touch_primary() and event is InputEventMouseButton:
+		return false
 	if not PlayDevice.has_pointer_down(event):
 		return false
 	_sync_touch_overlay_rects()
@@ -611,10 +618,20 @@ func _handle_touch_overlay(event: InputEvent) -> bool:
 	if _touch_close_rect.size.x > 0.0 and _touch_close_rect.has_point(point):
 		help_open = false
 		score_open = false
+		if touch != null:
+			touch.suppress_play_taps(280)
 		queue_redraw()
 		return true
 	if _touch_restart_rect.size.x > 0.0 and _touch_restart_rect.has_point(point):
 		_new_game()
+		return true
+	if help_open or score_open:
+		# Eat taps on the dimmed panel so they cannot fall through to play.
+		if touch != null:
+			touch.suppress_play_taps(280)
+		help_open = false
+		score_open = false
+		queue_redraw()
 		return true
 	return false
 

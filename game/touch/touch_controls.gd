@@ -23,6 +23,8 @@ const HOLD_ACTIONS := {
 }
 const TAP_ACTIONS := ["rot", "ccw", "drop", "hold"]
 const UTILITY := ["pause", "help", "scores", "restart", "mute", "full", "zones", "scale_down", "scale_up"]
+## Kept on its own row under the crowded utility strip.
+const UTILITY_BELOW := ["next"]
 const LABELS := {
 	"left": "<",
 	"right": ">",
@@ -38,6 +40,7 @@ const LABELS := {
 	"mute": "MUTE",
 	"full": "FULL",
 	"zones": "ZONES",
+	"next": "NEXT",
 }
 
 var _font: Font
@@ -46,6 +49,7 @@ var _hold_counts := {"ui_left": 0, "ui_right": 0, "ui_down": 0}
 var _rects: Dictionary = {}
 var _scale := SCALE_DEFAULT
 var _show_zones := false
+var _suppress_play_until_msec := 0
 var _metric_key := ""
 var _metric: Dictionary = {}
 
@@ -75,6 +79,15 @@ func toast_bottom_inset() -> float:
 	if not reserves_layout():
 		return 18.0
 	return band_height(get_viewport_rect().size.x) + 12.0
+
+
+func suppress_play_taps(duration_msec: int = 280) -> void:
+	# After closing an overlay, the same finger (or a ghost mouse click) must not
+	# land in a quadrant and hard-drop the piece.
+	_suppress_play_until_msec = maxi(
+		_suppress_play_until_msec,
+		Time.get_ticks_msec() + maxi(0, duration_msec)
+	)
 
 
 func handle_input(event: InputEvent) -> bool:
@@ -118,6 +131,9 @@ func _begin_finger(index: int, pos: Vector2) -> bool:
 	_rebuild_rects()
 	var id := _hit(pos)
 	if id == "":
+		if _play_taps_suppressed():
+			_fingers[index] = ""
+			return true
 		if _tap_quadrant(pos):
 			_fingers[index] = ""
 			return true
@@ -129,10 +145,17 @@ func _begin_finger(index: int, pos: Vector2) -> bool:
 		_fingers[index] = ""
 		queue_redraw()
 		return true
+	if _play_taps_suppressed() and _is_gameplay(id):
+		_fingers[index] = ""
+		return true
 	_fingers[index] = id
 	_on_press(id)
 	queue_redraw()
 	return true
+
+
+func _play_taps_suppressed() -> bool:
+	return Time.get_ticks_msec() < _suppress_play_until_msec
 
 
 func _end_finger(index: int) -> bool:
@@ -199,6 +222,10 @@ func _on_press(id: String) -> void:
 		var music := main.get_node_or_null("Music")
 		if music != null:
 			music.toggle_mute()
+	elif id == "next":
+		var music_next := main.get_node_or_null("Music")
+		if music_next != null:
+			music_next.skip_track()
 	elif id == "full":
 		main._toggle_fullscreen()
 		queue_redraw()
@@ -361,7 +388,9 @@ func _measure_dict(height: float, vp: Vector2) -> Dictionary:
 	var util_floor := minf(64.0, height)
 	var per := maxi(1, int(floor((inner + gap) / (util_floor + gap))))
 	var util_rows := int(ceil(float(UTILITY.size()) / float(per)))
-	var utility_h := margin + float(util_rows) * height + float(util_rows - 1) * gap + margin
+	var below_rows := 1 if not UTILITY_BELOW.is_empty() else 0
+	var total_util_rows := util_rows + below_rows
+	var utility_h := margin + float(total_util_rows) * height + float(total_util_rows - 1) * gap + margin
 	return {
 		"button_h": height,
 		"button_w": button_w,
@@ -405,6 +434,14 @@ func _place(m: Dictionary) -> void:
 			_rects[id] = Rect2(x, y, w, button_h)
 			x += w + gap
 			index += 1
+		y += button_h + gap
+	if not UTILITY_BELOW.is_empty():
+		var below_n := UTILITY_BELOW.size()
+		var below_w := (float(m.inner) - gap * float(below_n - 1)) / float(below_n)
+		var below_x := margin
+		for below_id in UTILITY_BELOW:
+			_rects[str(below_id)] = Rect2(below_x, y, below_w, button_h)
+			below_x += below_w + gap
 		y += button_h + gap
 	var band_top := vp.y - float(m.band_h) + margin
 	var left := ["left", "down", "right"]
