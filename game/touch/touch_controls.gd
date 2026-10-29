@@ -22,7 +22,7 @@ const HOLD_ACTIONS := {
 	"down": "ui_down",
 }
 const TAP_ACTIONS := ["rot", "ccw", "drop", "hold"]
-const UTILITY := ["pause", "help", "scores", "restart", "mute", "zones", "scale_down", "scale_up"]
+const UTILITY := ["pause", "help", "scores", "restart", "mute", "full", "zones", "scale_down", "scale_up"]
 const LABELS := {
 	"left": "<",
 	"right": ">",
@@ -36,6 +36,7 @@ const LABELS := {
 	"scores": "SCORES",
 	"restart": "RESTART",
 	"mute": "MUTE",
+	"full": "FULL",
 	"zones": "ZONES",
 }
 
@@ -198,6 +199,9 @@ func _on_press(id: String) -> void:
 		var music := main.get_node_or_null("Music")
 		if music != null:
 			music.toggle_mute()
+	elif id == "full":
+		main._toggle_fullscreen()
+		queue_redraw()
 	elif id == "zones":
 		_show_zones = not _show_zones
 		_save_prefs()
@@ -431,6 +435,8 @@ func _draw() -> void:
 		var held := false
 		if HOLD_ACTIONS.has(id):
 			held = int(_hold_counts[str(HOLD_ACTIONS[id])]) > 0
+		elif id == "full" and _is_fullscreen():
+			held = true
 		elif id == "zones" and _show_zones:
 			held = true
 		elif id == "scale_down" and _scale == SCALE_MIN:
@@ -473,11 +479,21 @@ func _draw_zone_guides() -> void:
 func _button_label(id: String, paused: bool) -> String:
 	if id == "pause" and paused:
 		return "RESUME"
+	if id == "full" and _is_fullscreen():
+		return "WINDOW"
 	if id == "scale_down":
 		return "%dx" % (maxi(SCALE_MIN, _scale - 1) if _scale > SCALE_MIN else _scale)
 	if id == "scale_up":
 		return "%dx" % (mini(SCALE_MAX, _scale + 1) if _scale < SCALE_MAX else _scale)
 	return str(LABELS[id])
+
+
+func _is_fullscreen() -> bool:
+	var mode := DisplayServer.window_get_mode()
+	return (
+		mode == DisplayServer.WINDOW_MODE_FULLSCREEN
+		or mode == DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN
+	)
 
 
 func _draw_button(rect: Rect2, label: String, pressed: bool) -> void:
