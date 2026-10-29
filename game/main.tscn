@@ -2,9 +2,13 @@
 
 [ext_resource type="Script" uid="uid://bic8lqucktf7p" path="res://game/main.gd" id="1_oa506"]
 [ext_resource type="Script" uid="uid://clm0ht4emonuu" path="res://game/music/music.gd" id="2_music"]
+[ext_resource type="Script" path="res://game/highscore/highscore_client.gd" id="3_highscores"]
 
 [node name="Main" type="Node2D" unique_id=133890310]
 script = ExtResource("1_oa506")
 
 [node name="Music" type="Node2D" parent="." unique_id=1847293651]
 script = ExtResource("2_music")
+
+[node name="Highscores" type="Node2D" parent="."]
+script = ExtResource("3_highscores")

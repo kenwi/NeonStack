@@ -8,3 +8,14 @@ export_presets.cfg.secret
 addons/
 .cursor/
 .mcp.json
+
+# Highscore server local data / secrets
+server/data/highscores.json
+server/data/highscores-e2e.json
+server/data/logs/
+server/.env
+server/bin/
+server/obj/
+server/logs/
+server/highscores-dev.json
+

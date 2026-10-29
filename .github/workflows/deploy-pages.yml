@@ -3,6 +3,9 @@ name: Deploy GitHub Pages
 on:
   push:
     branches: [main]
+    # Server is a separate Docker API; client Pages deploys only need game/export changes.
+    paths-ignore:
+      - "server/**"
   workflow_dispatch:
 
 permissions:

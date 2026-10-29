@@ -1,0 +1,10 @@
+**/bin/
+**/obj/
+**/.vs/
+**/.idea/
+**/highscores-dev.json
+data/highscores.json
+data/logs/
+.env
+.env.*
+!.env.example

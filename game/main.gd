@@ -36,6 +36,7 @@ const HELP_KEYS := [
 	["PgUp / PgDn", "Music volume"],
 	["Esc", "Pause"],
 	["R", "Restart"],
+	["L", "Highscores"],
 	["F / F11", "Fullscreen"],
 	["Q", "Quit"],
 	["H", "Toggle this help"],
@@ -112,6 +113,7 @@ var hold_locked := false
 var score := 0
 var lines_cleared := 0
 var level := 1
+var elapsed_seconds := 0.0
 var game_over := false
 var paused := false
 var help_open := false
@@ -147,8 +149,9 @@ var hint_pos := Vector2.ZERO
 var title_font: Font
 var body_font: Font
 
-# The scene already owns this node. Preloading its script from here cycles the load.
+# The scene already owns these nodes. Preloading scripts from here cycles the load.
 @onready var music = $Music
+@onready var highscores = $Highscores
 
 
 func _board_size() -> Vector2:
@@ -157,6 +160,14 @@ func _board_size() -> Vector2:
 
 func _board_center() -> Vector2:
 	return board_origin + _board_size() * 0.5
+
+
+func _set_game_over() -> void:
+	if game_over:
+		return
+	game_over = true
+	if highscores != null:
+		highscores.begin_game_over(score, lines_cleared, level, elapsed_seconds)
 
 
 func _ready() -> void:
@@ -180,6 +191,8 @@ func _apply_cell_metrics() -> void:
 	hint_size = maxi(12, int(round(HINT_SIZE_BASE * ui_scale)))
 	help_title_size = maxi(18, int(round(HELP_TITLE_SIZE_BASE * ui_scale)))
 	help_row_size = maxi(14, int(round(HELP_ROW_SIZE_BASE * ui_scale)))
+	if highscores != null:
+		highscores.set_ui_scale(ui_scale)
 
 
 func _layout() -> void:
@@ -248,6 +261,7 @@ func _new_game() -> void:
 	score = 0
 	lines_cleared = 0
 	level = 1
+	elapsed_seconds = 0.0
 	game_over = false
 	paused = false
 	help_open = false
@@ -261,6 +275,8 @@ func _new_game() -> void:
 	arr_timer = 0.0
 	soft_timer = 0.0
 	move_held = 0
+	if highscores != null:
+		highscores.reset_run()
 	_spawn_next()
 	queue_redraw()
 
@@ -283,7 +299,7 @@ func _spawn_next() -> void:
 	lock_timer = 0.0
 	lock_resets = 0
 	if not _valid(piece_pos, piece_rot):
-		game_over = true
+		_set_game_over()
 
 
 func _cells(pid: String, rot: int, origin: Vector2i) -> Array[Vector2i]:
@@ -368,7 +384,7 @@ func _lock_piece() -> void:
 		return
 	for c in _cells(piece_id, piece_rot, piece_pos):
 		if c.y < 0:
-			game_over = true
+			_set_game_over()
 			queue_redraw()
 			return
 		board[c.y][c.x] = piece_id
@@ -431,7 +447,7 @@ func _hold() -> void:
 		lock_timer = 0.0
 		lock_resets = 0
 		if not _valid(piece_pos, piece_rot):
-			game_over = true
+			_set_game_over()
 	queue_redraw()
 
 
@@ -446,9 +462,13 @@ func _drop_interval() -> float:
 	return maxf(0.05, 0.85 * pow(0.82, level - 1))
 
 
+func _highscores_open() -> bool:
+	return highscores != null and highscores.is_showing_overlay()
+
+
 func _process(delta: float) -> void:
 	pulse += delta
-	if game_over or paused or help_open or score_open:
+	if game_over or paused or help_open or score_open or _highscores_open():
 		queue_redraw()
 		return
 	if clear_timer > 0.0:
@@ -457,6 +477,7 @@ func _process(delta: float) -> void:
 			_finish_line_clear()
 		queue_redraw()
 		return
+	elapsed_seconds += delta
 	_handle_das(delta)
 	if Input.is_action_pressed("ui_down"):
 		soft_timer -= delta
@@ -538,13 +559,26 @@ func _quit_game() -> void:
 
 
 func _input(event: InputEvent) -> void:
+	# Name entry / submit owns the keyboard so game and music binds do not fire.
+	if highscores != null and highscores.is_capturing_input():
+		highscores.handle_input(event)
+		get_viewport().set_input_as_handled()
+		return
 	if music != null and music.handle_input(event):
+		get_viewport().set_input_as_handled()
+		return
+	if highscores != null and highscores.handle_input(event):
+		if _highscores_open():
+			help_open = false
+			score_open = false
 		get_viewport().set_input_as_handled()
 		return
 	if _key_pressed(event, KEY_H):
 		help_open = not help_open
 		if help_open:
 			score_open = false
+			if highscores != null:
+				highscores.close_overlay()
 		queue_redraw()
 		get_viewport().set_input_as_handled()
 		return
@@ -552,6 +586,8 @@ func _input(event: InputEvent) -> void:
 		score_open = not score_open
 		if score_open:
 			help_open = false
+			if highscores != null:
+				highscores.close_overlay()
 		queue_redraw()
 		get_viewport().set_input_as_handled()
 		return
@@ -571,6 +607,8 @@ func _input(event: InputEvent) -> void:
 		if help_open or score_open:
 			help_open = false
 			score_open = false
+		elif _highscores_open() and highscores != null and not highscores.is_capturing_input():
+			highscores.close_overlay()
 		elif DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_FULLSCREEN \
 			or DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN:
 			DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
@@ -583,9 +621,6 @@ func _input(event: InputEvent) -> void:
 		queue_redraw()
 		get_viewport().set_input_as_handled()
 		return
-	if help_open or score_open:
-		get_viewport().set_input_as_handled()
-		return
 	if game_over:
 		if (
 			_key_pressed(event, KEY_SPACE)
@@ -594,6 +629,9 @@ func _input(event: InputEvent) -> void:
 		):
 			_new_game()
 			get_viewport().set_input_as_handled()
+		return
+	if help_open or score_open or _highscores_open():
+		get_viewport().set_input_as_handled()
 		return
 	if paused:
 		if event.is_pressed() and not event.is_echo():
@@ -936,5 +974,14 @@ func _draw_overlays(vp: Vector2) -> void:
 		_draw_centered_label(center, "Any key resume    Esc / Q quit", body_font, 20, Color("e8f7ff"), 24.0)
 	if game_over:
 		draw_rect(Rect2(Vector2.ZERO, vp), Color(0, 0, 0, 0.62))
-		_draw_centered_label(center, "STACK FULL", title_font, 42, Color("fb7185"), -36.0)
-		_draw_centered_label(center, "R / Space / Enter restart    Esc / Q quit", body_font, 20, Color("e8f7ff"), 18.0)
+		var highscore_ui: bool = highscores != null and highscores.is_showing_overlay()
+		_draw_centered_label(
+			center,
+			"STACK FULL",
+			title_font,
+			42,
+			Color("fb7185"),
+			-120.0 if highscore_ui else -36.0
+		)
+		if not highscore_ui:
+			_draw_centered_label(center, "R / Space / Enter restart    Esc / Q quit", body_font, 20, Color("e8f7ff"), 18.0)
