@@ -2,10 +2,13 @@ extends Node2D
 
 ## Stylized neon-arcade Tetris clone.
 
+const PlayDevice = preload("res://game/platform/play_device.gd")
+
 const COLS := 10
 const ROWS := 20
 const REF_CELL := 36.0
 const MIN_CELL := 18.0
+const MIN_CELL_TOUCH := 6.0
 const MAX_CELL := 72.0
 const GAP := 2.0
 const FRAME_PAD := 14.0
@@ -24,6 +27,7 @@ const HINT_SIZE_BASE := 15
 const HELP_TITLE_SIZE_BASE := 28
 const HELP_ROW_SIZE_BASE := 18
 const HELP_HINT := "Press H for controls"
+const HELP_HINT_TOUCH := "Tap Help for controls"
 const HELP_KEYS := [
 	["Left / Right", "Move"],
 	["Up / X", "Rotate"],
@@ -41,6 +45,19 @@ const HELP_KEYS := [
 	["Q", "Quit"],
 	["H", "Toggle this help"],
 	["S", "Score table"],
+]
+const HELP_TOUCH := [
+	["Left / Right", "Move"],
+	["Down", "Soft drop"],
+	["Rotate", "Rotate"],
+	["Counter", "Counter-rotate"],
+	["Drop", "Hard drop"],
+	["Hold", "Hold piece"],
+	["Pause", "Pause"],
+	["Restart", "Restart"],
+	["Scores", "Highscores"],
+	["Mute", "Mute music"],
+	["Help", "Toggle this help"],
 ]
 const SCORE_HELP_ROWS := [
 	["Soft drop", "+1 per cell"],
@@ -152,6 +169,10 @@ var body_font: Font
 # The scene already owns these nodes. Preloading scripts from here cycles the load.
 @onready var music = $Music
 @onready var highscores = $Highscores
+@onready var touch = $TouchControls
+
+var _touch_close_rect := Rect2()
+var _touch_restart_rect := Rect2()
 
 
 func _board_size() -> Vector2:
@@ -207,21 +228,29 @@ func _layout() -> void:
 	var frame_outer := float(FRAME_PAD) + 3.0
 	var title_gap := 8.0
 	var width_cells := float(COLS) + HOLD_W_CELLS + SIDE_W_CELLS + SIDE_GAP_CELLS * 2.0
+	var min_cell := MIN_CELL
+	var top_inset := 0.0
+	var bottom_inset := 0.0
+	if touch != null and touch.reserves_layout():
+		min_cell = MIN_CELL_TOUCH
+		top_inset = touch.utility_height()
+		bottom_inset = touch.band_height(vp.x)
+	var usable_h := vp.y - top_inset - bottom_inset
 	var cell_from_w := floorf((vp.x - margin * 2.0) / width_cells)
 	var title_cells := float(TITLE_SIZE_BASE) / REF_CELL
-	var cell_from_h := floorf((vp.y - margin * 2.0 - title_gap - frame_outer * 2.0) / (float(ROWS) + title_cells))
-	cell_size = clampf(minf(cell_from_w, cell_from_h), MIN_CELL, MAX_CELL)
+	var cell_from_h := floorf((usable_h - margin * 2.0 - title_gap - frame_outer * 2.0) / (float(ROWS) + title_cells))
+	cell_size = clampf(minf(cell_from_w, cell_from_h), min_cell, MAX_CELL)
 	# Shrink until the measured title + board stack actually fits the viewport.
 	var title_ascent := 0.0
 	var title_descent := 0.0
 	var stack_h := 0.0
-	while cell_size > MIN_CELL:
+	while cell_size > min_cell:
 		_apply_cell_metrics()
 		title_ascent = title_font.get_ascent(title_size)
 		title_descent = title_font.get_descent(title_size)
 		stack_h = title_ascent + title_descent + title_gap + frame_outer * 2.0 + ROWS * cell_size
 		var stack_w := COLS * cell_size + hold_w + side_w + side_gap * 2.0
-		if stack_h <= vp.y - margin * 2.0 and stack_w <= vp.x - margin * 2.0:
+		if stack_h <= usable_h - margin * 2.0 and stack_w <= vp.x - margin * 2.0:
 			break
 		cell_size -= 1.0
 	_apply_cell_metrics()
@@ -230,7 +259,7 @@ func _layout() -> void:
 	var board_w := COLS * cell_size
 	var board_h := ROWS * cell_size
 	stack_h = title_ascent + title_descent + title_gap + frame_outer * 2.0 + board_h
-	var stack_top := maxf(margin, (vp.y - stack_h) * 0.5)
+	var stack_top := top_inset + maxf(margin, (usable_h - stack_h) * 0.5)
 	board_origin = Vector2((vp.x - board_w) * 0.5, stack_top + title_ascent + title_descent + title_gap + frame_outer)
 	var title := "NEON STACK"
 	var title_w := title_font.get_string_size(title, HORIZONTAL_ALIGNMENT_LEFT, -1, title_size).x
@@ -244,7 +273,7 @@ func _layout() -> void:
 	)
 	hint_pos.y = clampf(
 		hint_pos.y,
-		margin + body_font.get_ascent(hint_size),
+		top_inset + margin + body_font.get_ascent(hint_size),
 		board_origin.y - frame_outer - 8.0
 	)
 	queue_redraw()
@@ -561,10 +590,39 @@ func _quit_game() -> void:
 	get_tree().quit()
 
 
+func _help_rows() -> Array:
+	if PlayDevice.is_touch_primary():
+		return HELP_TOUCH
+	return HELP_KEYS
+
+
+func _handle_touch_overlay(event: InputEvent) -> bool:
+	if not PlayDevice.has_pointer_down(event):
+		return false
+	_sync_touch_overlay_rects()
+	var point := PlayDevice.pointer_down_position(event)
+	if _touch_close_rect.size.x > 0.0 and _touch_close_rect.has_point(point):
+		help_open = false
+		score_open = false
+		queue_redraw()
+		return true
+	if _touch_restart_rect.size.x > 0.0 and _touch_restart_rect.has_point(point):
+		_new_game()
+		return true
+	return false
+
+
 func _input(event: InputEvent) -> void:
 	# Name entry / submit owns the keyboard so game and music binds do not fire.
+	# Unhandled events stay unhandled so the touch name field can take them.
 	if highscores != null and highscores.is_capturing_input():
-		highscores.handle_input(event)
+		if highscores.handle_input(event):
+			get_viewport().set_input_as_handled()
+		return
+	if _handle_touch_overlay(event):
+		get_viewport().set_input_as_handled()
+		return
+	if touch != null and touch.handle_input(event):
 		get_viewport().set_input_as_handled()
 		return
 	if music != null and music.handle_input(event):
@@ -885,7 +943,8 @@ func _draw_side_panels() -> void:
 
 func _draw_hud() -> void:
 	draw_string(title_font, title_pos, "NEON STACK", HORIZONTAL_ALIGNMENT_LEFT, -1, title_size, Color("8ef7ff"))
-	draw_string(body_font, hint_pos, HELP_HINT, HORIZONTAL_ALIGNMENT_LEFT, -1, hint_size, Color("8ef7ff", 0.72))
+	var hint := HELP_HINT_TOUCH if PlayDevice.is_touch_primary() else HELP_HINT
+	draw_string(body_font, hint_pos, hint, HORIZONTAL_ALIGNMENT_LEFT, -1, hint_size, Color("8ef7ff", 0.72))
 
 
 func _draw_centered_label(center: Vector2, text: String, font: Font, size: int, color: Color, y_offset: float = 0.0) -> void:
@@ -893,8 +952,8 @@ func _draw_centered_label(center: Vector2, text: String, font: Font, size: int, 
 	draw_string(font, Vector2(center.x - width * 0.5, center.y + y_offset), text, HORIZONTAL_ALIGNMENT_LEFT, -1, size, color)
 
 
-func _draw_info_table(vp: Vector2, title: String, rows: Array, footer: String) -> void:
-	draw_rect(Rect2(Vector2.ZERO, vp), Color(0, 0, 0, 0.62))
+func _measure_info_table(vp: Vector2, title: String, rows: Array, footer: String) -> Dictionary:
+	var touch_ui := PlayDevice.is_touch_primary()
 	var left_w := 0.0
 	var right_w := 0.0
 	for row in rows:
@@ -906,14 +965,60 @@ func _draw_info_table(vp: Vector2, title: String, rows: Array, footer: String) -
 	var pad_bottom := 28.0 * ui_scale
 	var title_h := title_font.get_ascent(help_title_size) + title_font.get_descent(help_title_size)
 	var row_h := body_font.get_ascent(help_row_size) + body_font.get_descent(help_row_size) + 14.0 * ui_scale
-	var footer_h := body_font.get_ascent(hint_size) + body_font.get_descent(hint_size) + 10.0 * ui_scale
+	var footer_h := 56.0 if touch_ui else body_font.get_ascent(hint_size) + body_font.get_descent(hint_size) + 10.0 * ui_scale
 	var content_w := left_w + col_gap + right_w
 	var title_w := title_font.get_string_size(title, HORIZONTAL_ALIGNMENT_LEFT, -1, help_title_size).x
-	var footer_w := body_font.get_string_size(footer, HORIZONTAL_ALIGNMENT_LEFT, -1, hint_size).x
+	var footer_w := 0.0 if touch_ui else body_font.get_string_size(footer, HORIZONTAL_ALIGNMENT_LEFT, -1, hint_size).x
 	var panel_w := maxf(pad_x * 2.0 + content_w, maxf(title_w, footer_w) + pad_x * 2.0)
-	var panel_h := pad_top + title_h + 18.0 * ui_scale + row_h * rows.size() + footer_h + pad_bottom
+	if touch_ui:
+		panel_w = minf(panel_w, vp.x - 16.0)
+	var panel_h := pad_top + title_h + 18.0 * ui_scale + row_h * float(rows.size()) + footer_h + pad_bottom
 	var center := _board_center()
 	var panel := Rect2(center - Vector2(panel_w, panel_h) * 0.5, Vector2(panel_w, panel_h))
+	if touch_ui:
+		panel.position.x = clampf(panel.position.x, 8.0, maxf(8.0, vp.x - panel.size.x - 8.0))
+		panel.position.y = clampf(panel.position.y, 8.0, maxf(8.0, vp.y - panel.size.y - 8.0))
+	var close := Rect2()
+	if touch_ui:
+		var button_w := minf(160.0, panel.size.x - 24.0)
+		var button_h := 44.0
+		var button_y := minf(panel.end.y - button_h - 12.0, vp.y - button_h - 12.0)
+		close = Rect2(panel.position.x + (panel.size.x - button_w) * 0.5, button_y, button_w, button_h)
+	return {
+		"panel": panel,
+		"left_w": left_w,
+		"right_w": right_w,
+		"col_gap": col_gap,
+		"pad_x": pad_x,
+		"pad_top": pad_top,
+		"pad_bottom": pad_bottom,
+		"title_h": title_h,
+		"row_h": row_h,
+		"footer_h": footer_h,
+		"title_w": title_w,
+		"footer_w": footer_w,
+		"close": close,
+	}
+
+
+func _draw_info_table(vp: Vector2, title: String, rows: Array, footer: String) -> void:
+	draw_rect(Rect2(Vector2.ZERO, vp), Color(0, 0, 0, 0.62))
+	var layout := _measure_info_table(vp, title, rows, footer)
+	var panel: Rect2 = layout["panel"]
+	var panel_w := panel.size.x
+	var left_w: float = layout["left_w"]
+	var right_w: float = layout["right_w"]
+	var col_gap: float = layout["col_gap"]
+	var pad_x: float = layout["pad_x"]
+	var pad_top: float = layout["pad_top"]
+	var pad_bottom: float = layout["pad_bottom"]
+	var title_h: float = layout["title_h"]
+	var row_h: float = layout["row_h"]
+	var footer_h: float = layout["footer_h"]
+	var title_w: float = layout["title_w"]
+	var footer_w: float = layout["footer_w"]
+	var close: Rect2 = layout["close"]
+	_touch_close_rect = close
 	draw_rect(panel, Color("0b1a28", 0.96), true, -1.0, true)
 	draw_rect(panel, Color("8ef7ff", 0.45), false, 1.5, true)
 	draw_string(
@@ -941,6 +1046,8 @@ func _draw_info_table(vp: Vector2, title: String, rows: Array, footer: String) -
 		var left := str(row[0])
 		var right := str(row[1])
 		var y := row_y + i * row_h
+		if close.size.x > 0.0 and y > close.position.y - 8.0:
+			break
 		if i % 2 == 1:
 			draw_rect(
 				Rect2(Vector2(panel.position.x + 10.0, y - body_font.get_ascent(help_row_size) - 4.0), Vector2(panel_w - 20.0, row_h - 2.0)),
@@ -951,30 +1058,68 @@ func _draw_info_table(vp: Vector2, title: String, rows: Array, footer: String) -
 			)
 		draw_string(body_font, Vector2(left_x, y), left, HORIZONTAL_ALIGNMENT_LEFT, -1, help_row_size, Color("8ef7ff"))
 		draw_string(body_font, Vector2(right_x, y), right, HORIZONTAL_ALIGNMENT_LEFT, -1, help_row_size, Color("e8f7ff"))
-	var footer_y := panel.end.y - pad_bottom + body_font.get_ascent(hint_size) - footer_h + 8.0 * ui_scale
+	if close.size.x > 0.0:
+		_draw_overlay_button(close, "CLOSE")
+	else:
+		var footer_y := panel.end.y - pad_bottom + body_font.get_ascent(hint_size) - footer_h + 8.0 * ui_scale
+		draw_string(
+			body_font,
+			Vector2(panel.position.x + (panel_w - footer_w) * 0.5, footer_y),
+			footer,
+			HORIZONTAL_ALIGNMENT_LEFT,
+			-1,
+			hint_size,
+			Color("6a8799")
+		)
+
+
+func _draw_overlay_button(rect: Rect2, label: String) -> void:
+	draw_rect(rect, Color("0b1a28", 0.96), true, -1.0, true)
+	draw_rect(rect, Color("8ef7ff", 0.7), false, 2.0, true)
+	var size := 16
+	var text_w := body_font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x
+	var baseline := rect.position.y + (rect.size.y + body_font.get_ascent(size) - body_font.get_descent(size)) * 0.5
 	draw_string(
 		body_font,
-		Vector2(panel.position.x + (panel_w - footer_w) * 0.5, footer_y),
-		footer,
+		Vector2(rect.position.x + (rect.size.x - text_w) * 0.5, baseline),
+		label,
 		HORIZONTAL_ALIGNMENT_LEFT,
 		-1,
-		hint_size,
-		Color("6a8799")
+		size,
+		Color("e8f7ff")
 	)
 
 
+func _sync_touch_overlay_rects() -> void:
+	_touch_close_rect = Rect2()
+	_touch_restart_rect = Rect2()
+	if not PlayDevice.is_touch_primary() or title_font == null or body_font == null:
+		return
+	var vp := get_viewport_rect().size
+	if help_open or score_open:
+		var title := "CONTROLS" if help_open else "SCORE"
+		var rows: Array = _help_rows() if help_open else SCORE_HELP_ROWS
+		var layout := _measure_info_table(vp, title, rows, "")
+		_touch_close_rect = layout["close"]
+	elif game_over and not _highscores_open():
+		var center := _board_center()
+		_touch_restart_rect = Rect2(center.x - 80.0, center.y + 24.0, 160.0, 48.0)
+
+
 func _draw_overlays(vp: Vector2) -> void:
+	_sync_touch_overlay_rects()
 	if score_open:
 		_draw_info_table(vp, "SCORE", SCORE_HELP_ROWS, "S or Esc to close")
 		return
 	if help_open:
-		_draw_info_table(vp, "CONTROLS", HELP_KEYS, "H or Esc to close")
+		_draw_info_table(vp, "CONTROLS", _help_rows(), "H or Esc to close")
 		return
 	var center := _board_center()
 	if paused:
 		draw_rect(Rect2(Vector2.ZERO, vp), Color(0, 0, 0, 0.55))
 		_draw_centered_label(center, "PAUSED", title_font, 42, Color("8ef7ff"), -24.0)
-		_draw_centered_label(center, "Any key resume    Esc / Q quit", body_font, 20, Color("e8f7ff"), 24.0)
+		var paused_hint := "Tap anywhere to resume" if PlayDevice.is_touch_primary() else "Any key resume    Esc / Q quit"
+		_draw_centered_label(center, paused_hint, body_font, 20, Color("e8f7ff"), 24.0)
 	if game_over:
 		draw_rect(Rect2(Vector2.ZERO, vp), Color(0, 0, 0, 0.62))
 		var highscore_ui: bool = highscores != null and highscores.is_showing_overlay()
@@ -987,4 +1132,7 @@ func _draw_overlays(vp: Vector2) -> void:
 			-120.0 if highscore_ui else -36.0
 		)
 		if not highscore_ui:
-			_draw_centered_label(center, "R / Space / Enter restart    Esc / Q quit", body_font, 20, Color("e8f7ff"), 18.0)
+			if _touch_restart_rect.size.x > 0.0:
+				_draw_overlay_button(_touch_restart_rect, "RESTART")
+			else:
+				_draw_centered_label(center, "R / Space / Enter restart    Esc / Q quit", body_font, 20, Color("e8f7ff"), 18.0)

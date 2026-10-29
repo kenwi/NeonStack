@@ -28,7 +28,10 @@ docker compose up -d --build
 API:
 
 - `GET  http://localhost:5080/api/scores/classic?top=10`
+- `GET  http://localhost:5080/api/scores/classic-mobile?top=10`
 - `POST http://localhost:5080/api/scores`
+
+Keyboard play submits `modeId` `classic`. Touch-primary play (phone and tablet browsers) submits `classic-mobile`. The checksum includes the mode id, so each board is a separate list. Existing classic scores stay on the classic board.
 
 ### Submit body
 

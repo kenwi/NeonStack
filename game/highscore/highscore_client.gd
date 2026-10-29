@@ -4,6 +4,7 @@ extends Node2D
 
 const HighscoreConfig = preload("res://game/highscore/highscore_config.gd")
 const HighscoreChecksum = preload("res://game/highscore/highscore_checksum.gd")
+const PlayDevice = preload("res://game/platform/play_device.gd")
 
 enum Phase { IDLE, NAME_ENTRY, SUBMITTING, LEADERBOARD }
 
@@ -20,21 +21,55 @@ var pending_level := 1
 var pending_elapsed := 0.0
 var submitted_this_run := false
 var leaderboard_open := false
+var submit_mode_id := ""
+var view_mode_id := ""
 
-var _http: HTTPRequest
+var _submit_gen := 0
+var _leaderboard_gen := 0
+var _submit_lock := false
+var _name_edit: LineEdit
+var _editing_name := false
+var _tab_classic_rect := Rect2()
+var _tab_mobile_rect := Rect2()
+var _lb_close_rect := Rect2()
+var _lb_restart_rect := Rect2()
+var _submit_rect := Rect2()
+var _skip_rect := Rect2()
+var _name_field_rect := Rect2()
 var _title_font: Font
 var _body_font: Font
-var _awaiting: String = ""
 var _ui_scale := 1.0
 
 
 func _ready() -> void:
 	_title_font = ThemeDB.fallback_font
 	_body_font = ThemeDB.fallback_font
-	_http = HTTPRequest.new()
-	_http.timeout = 8.0
-	add_child(_http)
-	_http.request_completed.connect(_on_request_completed)
+	submit_mode_id = PlayDevice.score_mode_id()
+	view_mode_id = submit_mode_id
+	_name_edit = LineEdit.new()
+	_name_edit.visible = false
+	_name_edit.max_length = HighscoreConfig.MAX_PLAYER_NAME_LENGTH
+	_name_edit.caret_blink = true
+	_name_edit.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_name_edit.context_menu_enabled = false
+	_name_edit.virtual_keyboard_enabled = true
+	_name_edit.virtual_keyboard_show_on_focus = true
+	_name_edit.mouse_filter = Control.MOUSE_FILTER_STOP
+	var field := StyleBoxFlat.new()
+	field.bg_color = Color("071018")
+	field.border_color = Color("8ef7ff", 0.55)
+	field.set_border_width_all(1)
+	field.set_corner_radius_all(4)
+	field.content_margin_left = 8.0
+	field.content_margin_right = 8.0
+	_name_edit.add_theme_stylebox_override("normal", field)
+	_name_edit.add_theme_stylebox_override("focus", field)
+	_name_edit.add_theme_color_override("font_color", Color("ffd166"))
+	_name_edit.add_theme_color_override("font_placeholder_color", Color("6a8799"))
+	_name_edit.add_theme_color_override("caret_color", Color("ffd166"))
+	_name_edit.text_changed.connect(_on_name_text_changed)
+	_name_edit.text_submitted.connect(_on_name_submitted)
+	add_child(_name_edit)
 	player_name = _load_player_name()
 
 
@@ -53,7 +88,11 @@ func reset_run() -> void:
 	pending_lines = 0
 	pending_level = 1
 	pending_elapsed = 0.0
-	_awaiting = ""
+	view_mode_id = submit_mode_id
+	_submit_gen += 1
+	_leaderboard_gen += 1
+	_submit_lock = false
+	_hide_touch_keyboard()
 	queue_redraw()
 
 
@@ -65,13 +104,26 @@ func begin_game_over(score: int, lines: int, level: int, elapsed_seconds: float)
 	submitted_rank = -1
 	status_text = ""
 	leaderboard_open = false
+	view_mode_id = submit_mode_id
 	if submitted_this_run:
 		phase = Phase.LEADERBOARD
+		_hide_touch_keyboard()
 		_fetch_leaderboard()
 	else:
 		phase = Phase.NAME_ENTRY
 		cursor_timer = 0.0
 		name_cursor_on = true
+		_show_touch_keyboard.call_deferred()
+	queue_redraw()
+
+
+func open_leaderboard() -> void:
+	if is_capturing_input():
+		return
+	view_mode_id = submit_mode_id
+	leaderboard_open = true
+	phase = Phase.LEADERBOARD
+	_fetch_leaderboard()
 	queue_redraw()
 
 
@@ -98,6 +150,15 @@ func close_overlay() -> void:
 
 
 func handle_input(event: InputEvent) -> bool:
+	if phase == Phase.NAME_ENTRY:
+		return _handle_name_entry(event)
+
+	if phase == Phase.SUBMITTING:
+		return true
+
+	if is_showing_overlay() and _handle_leaderboard_pointer(event):
+		return true
+
 	if _key_pressed(event, KEY_L) and not is_capturing_input():
 		if leaderboard_open or phase == Phase.LEADERBOARD:
 			leaderboard_open = false
@@ -105,16 +166,7 @@ func handle_input(event: InputEvent) -> bool:
 				phase = Phase.IDLE
 			queue_redraw()
 		else:
-			leaderboard_open = true
-			phase = Phase.LEADERBOARD
-			_fetch_leaderboard()
-			queue_redraw()
-		return true
-
-	if phase == Phase.NAME_ENTRY:
-		return _handle_name_entry(event)
-
-	if phase == Phase.SUBMITTING:
+			open_leaderboard()
 		return true
 
 	return false
@@ -126,16 +178,15 @@ func _is_game_over_context() -> bool:
 
 
 func _handle_name_entry(event: InputEvent) -> bool:
+	if PlayDevice.is_touch_primary():
+		return _handle_touch_name_entry(event)
 	if event is InputEventKey and event.pressed and not event.echo:
 		var key := event as InputEventKey
 		if key.keycode == KEY_ENTER or key.keycode == KEY_KP_ENTER:
 			_submit_score()
 			return true
 		if key.keycode == KEY_ESCAPE:
-			phase = Phase.LEADERBOARD
-			status_text = "Skipped submit"
-			_fetch_leaderboard()
-			queue_redraw()
+			_skip_name_entry()
 			return true
 		if key.keycode == KEY_BACKSPACE:
 			if player_name.length() > 0:
@@ -165,8 +216,81 @@ func _is_allowed_name_char(ch: String) -> bool:
 	)
 
 
+func _skip_name_entry() -> void:
+	_hide_touch_keyboard()
+	phase = Phase.LEADERBOARD
+	status_text = "Skipped submit"
+	view_mode_id = submit_mode_id
+	_fetch_leaderboard()
+	queue_redraw()
+
+
+func _handle_touch_name_entry(event: InputEvent) -> bool:
+	if PlayDevice.has_pointer_down(event):
+		_layout_name_targets(get_viewport_rect().size)
+		var point := PlayDevice.pointer_down_position(event)
+		if _submit_rect.has_point(point):
+			_submit_score()
+			return true
+		if _skip_rect.has_point(point):
+			_skip_name_entry()
+			return true
+		return false
+	if event is InputEventKey and event.pressed and not event.echo:
+		var key := event as InputEventKey
+		if key.keycode == KEY_ENTER or key.keycode == KEY_KP_ENTER:
+			_submit_score()
+			return true
+		if key.keycode == KEY_ESCAPE:
+			_skip_name_entry()
+			return true
+	return false
+
+
+func _handle_leaderboard_pointer(event: InputEvent) -> bool:
+	if not PlayDevice.has_pointer_down(event):
+		return false
+	if not (leaderboard_open or phase == Phase.LEADERBOARD):
+		return false
+	_layout_leaderboard(get_viewport_rect().size)
+	var point := PlayDevice.pointer_down_position(event)
+	if _tab_classic_rect.has_point(point):
+		_set_view_mode(HighscoreConfig.MODE_ID)
+		return true
+	if _tab_mobile_rect.has_point(point):
+		_set_view_mode(HighscoreConfig.MODE_ID_MOBILE)
+		return true
+	if _lb_close_rect.size.x > 0.0 and _lb_close_rect.has_point(point):
+		leaderboard_open = false
+		if _is_game_over_context():
+			phase = Phase.IDLE
+		elif phase == Phase.LEADERBOARD:
+			phase = Phase.IDLE
+		queue_redraw()
+		return true
+	if _lb_restart_rect.size.x > 0.0 and _lb_restart_rect.has_point(point):
+		get_parent()._new_game()
+		return true
+	return false
+
+
+func _set_view_mode(mode_id: String) -> void:
+	if view_mode_id == mode_id:
+		return
+	view_mode_id = mode_id
+	entries.clear()
+	status_text = ""
+	_fetch_leaderboard()
+	queue_redraw()
+
+
 func _process(delta: float) -> void:
-	if phase != Phase.NAME_ENTRY:
+	if _name_edit != null and _name_edit.visible:
+		_layout_name_targets(get_viewport_rect().size)
+		_name_edit.position = _name_field_rect.position
+		_name_edit.size = _name_field_rect.size
+		_name_edit.add_theme_font_size_override("font_size", maxi(14, int(round(18.0 * _ui_scale))))
+	if phase != Phase.NAME_ENTRY or PlayDevice.is_touch_primary():
 		return
 	cursor_timer += delta
 	if cursor_timer >= 0.45:
@@ -186,10 +310,9 @@ func _draw() -> void:
 
 
 func _draw_name_panel(vp: Vector2) -> void:
+	var panel := _layout_name_targets(vp)
 	var ui_scale := _ui_scale
-	var panel_w := mini(420.0 * ui_scale, vp.x - 40.0)
-	var panel_h := 210.0 * ui_scale
-	var panel := Rect2((vp.x - panel_w) * 0.5, (vp.y - panel_h) * 0.5 + 36.0 * ui_scale, panel_w, panel_h)
+	var touch_ui := PlayDevice.is_touch_primary()
 	draw_rect(panel, Color("0b1a28", 0.94), true, -1.0, true)
 	draw_rect(panel, Color("8ef7ff", 0.55), false, maxf(1.0, 2.0 * ui_scale), true)
 
@@ -201,6 +324,10 @@ func _draw_name_panel(vp: Vector2) -> void:
 	_draw_centered(_title_font, Vector2(cx, y), "ENTER NAME", title_size, Color("8ef7ff"))
 	y += 42.0 * ui_scale
 	_draw_centered(_body_font, Vector2(cx, y), "Score %d" % pending_score, body_size, Color("e8f7ff"))
+	if touch_ui and phase == Phase.NAME_ENTRY:
+		_draw_choice(_submit_rect, "SUBMIT", true)
+		_draw_choice(_skip_rect, "SKIP", false)
+		return
 	y += 36.0 * ui_scale
 	var display := player_name
 	if name_cursor_on and phase == Phase.NAME_ENTRY:
@@ -216,22 +343,21 @@ func _draw_name_panel(vp: Vector2) -> void:
 
 
 func _draw_leaderboard_panel(vp: Vector2) -> void:
+	var panel := _layout_leaderboard(vp)
 	var ui_scale := _ui_scale
-	var panel_w := mini(480.0 * ui_scale, vp.x - 32.0)
-	var row_h := 26.0 * ui_scale
-	var rows := maxi(1, entries.size())
-	var panel_h := mini(120.0 * ui_scale + float(rows) * row_h + 48.0 * ui_scale, vp.y - 32.0)
-	var panel := Rect2((vp.x - panel_w) * 0.5, (vp.y - panel_h) * 0.5, panel_w, panel_h)
+	var touch_ui := PlayDevice.is_touch_primary()
 	draw_rect(panel, Color("0b1a28", 0.94), true, -1.0, true)
 	draw_rect(panel, Color("8ef7ff", 0.55), false, maxf(1.0, 2.0 * ui_scale), true)
 
 	var title_size := maxi(18, int(round(26 * ui_scale)))
 	var body_size := maxi(12, int(round(16 * ui_scale)))
 	var hint_size := maxi(11, int(round(13 * ui_scale)))
-	var y := panel.position.y + 34.0 * ui_scale
-	_draw_centered(_title_font, Vector2(panel.get_center().x, y), "HIGHSCORES", title_size, Color("8ef7ff"))
-	y += 28.0 * ui_scale
-	if submitted_rank > 0:
+	var y := panel.position.y + 28.0 * ui_scale
+	_draw_centered(_title_font, Vector2(panel.get_center().x, y), _board_title(), title_size, Color("8ef7ff"))
+	_draw_choice(_tab_classic_rect, "CLASSIC", view_mode_id != HighscoreConfig.MODE_ID_MOBILE)
+	_draw_choice(_tab_mobile_rect, "MOBILE", view_mode_id == HighscoreConfig.MODE_ID_MOBILE)
+	y = _tab_classic_rect.end.y + 22.0 * ui_scale
+	if submitted_rank > 0 and view_mode_id == submit_mode_id:
 		_draw_centered(
 			_body_font,
 			Vector2(panel.get_center().x, y),
@@ -244,6 +370,9 @@ func _draw_leaderboard_panel(vp: Vector2) -> void:
 		_draw_centered(_body_font, Vector2(panel.get_center().x, y), status_text, body_size, Color("fb7185"))
 		y += 24.0 * ui_scale
 
+	var row_limit := panel.end.y - 28.0 * ui_scale
+	if _lb_close_rect.size.x > 0.0:
+		row_limit = _lb_close_rect.position.y - 8.0
 	if entries.is_empty() and status_text.is_empty():
 		_draw_centered(
 			_body_font,
@@ -253,10 +382,13 @@ func _draw_leaderboard_panel(vp: Vector2) -> void:
 			Color("6a8799")
 		)
 	else:
+		var row_h := 26.0 * ui_scale
 		var left_x := panel.position.x + 18.0 * ui_scale
-		var score_x := panel.position.x + panel_w * 0.55
-		var time_x := panel.position.x + panel_w - 18.0 * ui_scale
+		var score_x := panel.position.x + panel.size.x * 0.55
+		var time_x := panel.end.x - 18.0 * ui_scale
 		for entry in entries:
+			if y > row_limit:
+				break
 			var rank: int = int(entry.get("rank", 0))
 			var pname: String = str(entry.get("playerName", "?"))
 			var score: int = int(entry.get("finalScore", 0))
@@ -284,19 +416,23 @@ func _draw_leaderboard_panel(vp: Vector2) -> void:
 				Color("6a8799")
 			)
 			y += row_h
-			if y > panel.end.y - 36.0 * ui_scale:
-				break
 
-	var footer := "R / Space / Enter restart"
-	if not _is_game_over_context():
-		footer = "L close"
-	_draw_centered(
-		_body_font,
-		Vector2(panel.get_center().x, panel.end.y - 18.0 * ui_scale),
-		footer,
-		hint_size,
-		Color("6a8799")
-	)
+	if touch_ui:
+		if _lb_close_rect.size.x > 0.0:
+			_draw_choice(_lb_close_rect, "CLOSE", false)
+		if _lb_restart_rect.size.x > 0.0:
+			_draw_choice(_lb_restart_rect, "RESTART", true)
+	else:
+		var footer := "R / Space / Enter restart"
+		if not _is_game_over_context():
+			footer = "L close"
+		_draw_centered(
+			_body_font,
+			Vector2(panel.get_center().x, panel.end.y - 16.0 * ui_scale),
+			footer,
+			hint_size,
+			Color("6a8799")
+		)
 
 
 func _draw_centered(font: Font, center: Vector2, text: String, size: int, color: Color) -> void:
@@ -312,8 +448,15 @@ func _format_time(seconds: float) -> String:
 
 
 func _submit_score() -> void:
+	if _submit_lock or phase == Phase.SUBMITTING:
+		return
+	_submit_lock = true
+	if _name_edit != null and _name_edit.visible:
+		player_name = _filter_name_live(_name_edit.text)
+	_hide_touch_keyboard()
 	if submitted_this_run:
 		phase = Phase.LEADERBOARD
+		view_mode_id = submit_mode_id
 		_fetch_leaderboard()
 		queue_redraw()
 		return
@@ -322,7 +465,8 @@ func _submit_score() -> void:
 	player_name = sanitized_name
 	_save_player_name(sanitized_name)
 
-	var mode_id: String = HighscoreChecksum.sanitize_mode_id(HighscoreConfig.MODE_ID)
+	view_mode_id = submit_mode_id
+	var mode_id: String = HighscoreChecksum.sanitize_mode_id(submit_mode_id)
 	var checksum: String = HighscoreChecksum.compute(
 		mode_id,
 		sanitized_name,
@@ -343,43 +487,78 @@ func _submit_score() -> void:
 	phase = Phase.SUBMITTING
 	status_text = "Submitting..."
 	submitted_this_run = true
-	_awaiting = "submit"
 	queue_redraw()
 
 	var body := JSON.stringify(payload)
 	var headers := PackedStringArray(["Content-Type: application/json"])
 	var url := "%s/api/scores" % HighscoreConfig.API_BASE_URL.trim_suffix("/")
-	var err := _http.request(url, headers, HTTPClient.METHOD_POST, body)
+	var err := _send("submit", url, headers, HTTPClient.METHOD_POST, body, mode_id, _submit_gen)
 	if err != OK:
 		status_text = "Submit failed (offline)"
 		phase = Phase.LEADERBOARD
-		_awaiting = ""
 		_fetch_leaderboard()
 		queue_redraw()
 
 
 func _fetch_leaderboard() -> void:
-	_awaiting = "leaderboard"
-	var mode_id: String = HighscoreChecksum.sanitize_mode_id(HighscoreConfig.MODE_ID)
+	_leaderboard_gen += 1
+	var generation := _leaderboard_gen
+	var mode_id: String = HighscoreChecksum.sanitize_mode_id(view_mode_id if not view_mode_id.is_empty() else submit_mode_id)
 	var url := "%s/api/scores/%s?top=%d" % [
 		HighscoreConfig.API_BASE_URL.trim_suffix("/"),
 		mode_id.uri_encode(),
 		HighscoreConfig.DEFAULT_TOP_COUNT,
 	]
-	var err := _http.request(url, PackedStringArray(), HTTPClient.METHOD_GET)
+	var err := _send("leaderboard", url, PackedStringArray(), HTTPClient.METHOD_GET, "", mode_id, generation)
 	if err != OK:
 		if status_text.is_empty():
 			status_text = "Scores unavailable"
-		_awaiting = ""
 		queue_redraw()
 
 
-func _on_request_completed(_result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
-	var awaiting := _awaiting
-	_awaiting = ""
+func _send(
+	kind: String,
+	url: String,
+	headers: PackedStringArray,
+	method: int,
+	body: String,
+	mode_id: String,
+	generation: int
+) -> int:
+	var http := HTTPRequest.new()
+	http.timeout = 8.0
+	add_child(http)
+	http.request_completed.connect(func(result: int, response_code: int, response_headers: PackedStringArray, response_body: PackedByteArray) -> void:
+		_on_request_completed(http, kind, mode_id, generation, result, response_code, response_headers, response_body)
+	)
+	var err := http.request(url, headers, method, body)
+	if err != OK:
+		http.queue_free()
+	return err
+
+
+func _on_request_completed(
+	http: HTTPRequest,
+	kind: String,
+	mode_id: String,
+	generation: int,
+	_result: int,
+	response_code: int,
+	_headers: PackedStringArray,
+	body: PackedByteArray
+) -> void:
+	if is_instance_valid(http):
+		http.queue_free()
+	if kind == "submit" and generation != _submit_gen:
+		return
+	if kind == "leaderboard" and (
+		generation != _leaderboard_gen
+		or mode_id != HighscoreChecksum.sanitize_mode_id(view_mode_id)
+	):
+		return
 	var text := body.get_string_from_utf8()
 
-	if awaiting == "submit":
+	if kind == "submit":
 		if response_code == 200:
 			var parsed = JSON.parse_string(text)
 			if typeof(parsed) == TYPE_DICTIONARY:
@@ -398,7 +577,7 @@ func _on_request_completed(_result: int, response_code: int, _headers: PackedStr
 		queue_redraw()
 		return
 
-	if awaiting == "leaderboard":
+	if kind == "leaderboard":
 		if response_code == 200:
 			var parsed = JSON.parse_string(text)
 			if typeof(parsed) == TYPE_ARRAY:
@@ -412,6 +591,136 @@ func _on_request_completed(_result: int, response_code: int, _headers: PackedStr
 			if status_text.is_empty():
 				status_text = "Scores unavailable"
 		queue_redraw()
+
+
+func _board_title() -> String:
+	if view_mode_id == HighscoreConfig.MODE_ID_MOBILE:
+		return "MOBILE HIGHSCORES"
+	return "HIGHSCORES"
+
+
+func _layout_name_targets(vp: Vector2) -> Rect2:
+	var ui_scale := _ui_scale
+	var touch_ui := PlayDevice.is_touch_primary()
+	_submit_rect = Rect2()
+	_skip_rect = Rect2()
+	_name_field_rect = Rect2()
+	if not touch_ui:
+		var desktop_w := mini(420.0 * ui_scale, vp.x - 40.0)
+		var desktop_h := 210.0 * ui_scale
+		return Rect2((vp.x - desktop_w) * 0.5, (vp.y - desktop_h) * 0.5 + 36.0 * ui_scale, desktop_w, desktop_h)
+	var panel_w := mini(maxf(420.0 * ui_scale, 300.0), vp.x - 16.0)
+	var panel_h := minf(maxf(250.0, 210.0 * ui_scale), vp.y - 16.0)
+	var panel := Rect2((vp.x - panel_w) * 0.5, maxf(8.0, (vp.y - panel_h) * 0.35), panel_w, panel_h)
+	var gap := 8.0
+	var button_h := 44.0
+	var button_w := (panel.size.x - 24.0 - gap) * 0.5
+	var button_y := panel.end.y - button_h - 12.0
+	_skip_rect = Rect2(panel.position.x + 12.0, button_y, button_w, button_h)
+	_submit_rect = Rect2(_skip_rect.end.x + gap, button_y, button_w, button_h)
+	_name_field_rect = Rect2(panel.position.x + 20.0, button_y - 56.0, panel.size.x - 40.0, 40.0)
+	return panel
+
+
+func _layout_leaderboard(vp: Vector2) -> Rect2:
+	var ui_scale := _ui_scale
+	var touch_ui := PlayDevice.is_touch_primary()
+	var panel_w := mini(480.0 * ui_scale, vp.x - 32.0)
+	if touch_ui:
+		panel_w = mini(maxf(480.0 * ui_scale, 300.0), vp.x - 16.0)
+	var row_h := 26.0 * ui_scale
+	var rows := maxi(1, entries.size())
+	var tab_h := maxf(36.0, 32.0 * ui_scale)
+	var action_h := 56.0 if touch_ui else 0.0
+	var panel_h := mini(100.0 * ui_scale + tab_h + action_h + float(rows) * row_h + 48.0 * ui_scale, vp.y - 16.0)
+	var panel_y := (vp.y - panel_h) * 0.5
+	if touch_ui:
+		panel_y = maxf(8.0, panel_y)
+	var panel := Rect2((vp.x - panel_w) * 0.5, panel_y, panel_w, panel_h)
+	var gap := 8.0
+	var tab_w := (panel.size.x - 24.0 - gap) * 0.5
+	var tab_y := panel.position.y + 40.0 * ui_scale
+	_tab_classic_rect = Rect2(panel.position.x + 12.0, tab_y, tab_w, tab_h)
+	_tab_mobile_rect = Rect2(_tab_classic_rect.end.x + gap, tab_y, tab_w, tab_h)
+	_lb_close_rect = Rect2()
+	_lb_restart_rect = Rect2()
+	if touch_ui:
+		var button_h := 44.0
+		var button_y := panel.end.y - button_h - 10.0
+		if _is_game_over_context():
+			var button_w := (panel.size.x - 24.0 - gap) * 0.5
+			_lb_close_rect = Rect2(panel.position.x + 12.0, button_y, button_w, button_h)
+			_lb_restart_rect = Rect2(_lb_close_rect.end.x + gap, button_y, button_w, button_h)
+		else:
+			var button_w := minf(180.0, panel.size.x - 24.0)
+			_lb_close_rect = Rect2(panel.position.x + (panel.size.x - button_w) * 0.5, button_y, button_w, button_h)
+	return panel
+
+
+func _draw_choice(rect: Rect2, label: String, selected: bool) -> void:
+	if rect.size.x <= 0.0:
+		return
+	var fill := Color("123047", 0.96) if selected else Color("071018", 0.94)
+	var border := Color("8ef7ff", 0.9) if selected else Color("8ef7ff", 0.4)
+	draw_rect(rect, fill, true, -1.0, true)
+	draw_rect(rect, border, false, 2.0, true)
+	var size := 14
+	var baseline := rect.position.y + (rect.size.y + _body_font.get_ascent(size) - _body_font.get_descent(size)) * 0.5
+	_draw_centered(_body_font, Vector2(rect.get_center().x, baseline), label, size, Color("e8f7ff"))
+
+
+func _filter_name_live(value: String) -> String:
+	var out := ""
+	for i in value.length():
+		var ch := value.substr(i, 1)
+		if _is_allowed_name_char(ch):
+			out += ch
+	return out
+
+
+func _on_name_text_changed(value: String) -> void:
+	if _editing_name:
+		return
+	var filtered := _filter_name_live(value)
+	if filtered != value:
+		_editing_name = true
+		var caret := _name_edit.caret_column
+		_name_edit.text = filtered
+		_name_edit.caret_column = mini(caret, filtered.length())
+		_editing_name = false
+	player_name = filtered
+
+
+func _on_name_submitted(_value: String) -> void:
+	_submit_score()
+
+
+func _show_touch_keyboard() -> void:
+	if not PlayDevice.is_touch_primary() or _name_edit == null or phase != Phase.NAME_ENTRY:
+		return
+	_layout_name_targets(get_viewport_rect().size)
+	_name_edit.text = player_name
+	_name_edit.visible = true
+	_name_edit.position = _name_field_rect.position
+	_name_edit.size = _name_field_rect.size
+	_name_edit.grab_focus()
+	DisplayServer.virtual_keyboard_show(
+		player_name,
+		_name_field_rect,
+		DisplayServer.KEYBOARD_TYPE_DEFAULT,
+		HighscoreConfig.MAX_PLAYER_NAME_LENGTH,
+		player_name.length(),
+		player_name.length()
+	)
+
+
+func _hide_touch_keyboard() -> void:
+	if _name_edit == null:
+		return
+	_name_edit.release_focus()
+	_name_edit.visible = false
+	if PlayDevice.is_touch_primary():
+		DisplayServer.virtual_keyboard_hide()
 
 
 func _load_player_name() -> String:

@@ -95,9 +95,10 @@ public sealed class DiscordScoreAnnouncer
         var time = FormatTime(submission.ElapsedSeconds);
         bool isTopSpot = result.Rank == 1;
 
+        var modeLabel = ModeLabel(submission.ModeId);
         var title = isTopSpot
-            ? $"New #1 on {submission.ModeId}!"
-            : $"New score on {submission.ModeId}";
+            ? $"New #1 on {modeLabel}!"
+            : $"New score on {modeLabel}";
 
         var description = isTopSpot
             ? $"**{submission.PlayerName}** took the top spot with **{score}** points in {time}."
@@ -143,6 +144,13 @@ public sealed class DiscordScoreAnnouncer
             }
         };
     }
+
+    private static string ModeLabel(string modeId) => modeId switch
+    {
+        "classic" => "Classic",
+        "classic-mobile" => "Mobile",
+        _ => modeId,
+    };
 
     private static string FormatTime(float elapsedSeconds)
     {

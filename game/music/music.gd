@@ -62,6 +62,10 @@ func _is_key(event: InputEvent, code: Key) -> bool:
 	return key.keycode == code or key.physical_keycode == code
 
 
+func toggle_mute() -> void:
+	_toggle_mute()
+
+
 func _toggle_mute() -> void:
 	_muted = not _muted
 	_apply_volume()
@@ -156,6 +160,16 @@ func _apply_volume() -> void:
 		_player.volume_db = linear_to_db(float(_volume_step) / float(VOLUME_STEPS))
 
 
+func _toast_bottom_inset() -> float:
+	var parent_node := get_parent()
+	if parent_node == null:
+		return 18.0
+	var touch := parent_node.get_node_or_null("TouchControls")
+	if touch != null and touch.has_method("toast_bottom_inset"):
+		return float(touch.toast_bottom_inset())
+	return 18.0
+
+
 func _show(text: String) -> void:
 	_status = text
 	_status_timer = STATUS_TIME
@@ -181,7 +195,7 @@ func _draw() -> void:
 	var pad_x := 16.0
 	var pad_y := 8.0
 	var box_size := Vector2(text_size.x + pad_x * 2.0, text_size.y + pad_y * 2.0)
-	var box := Rect2(Vector2((vp.x - box_size.x) * 0.5, vp.y - box_size.y - 18.0), box_size)
+	var box := Rect2(Vector2((vp.x - box_size.x) * 0.5, vp.y - box_size.y - _toast_bottom_inset()), box_size)
 	draw_rect(box, Color("0b1a28", 0.92 * alpha), true, -1.0, true)
 	draw_rect(box, Color("8ef7ff", 0.45 * alpha), false, 1.5, true)
 	var baseline := box.position.y + pad_y + _font.get_ascent(font_size)
