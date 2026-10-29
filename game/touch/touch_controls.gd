@@ -40,7 +40,7 @@ const LABELS := {
 	"mute": "MUTE",
 	"full": "FULL",
 	"zones": "ZONES",
-	"next": "NEXT",
+	"next": "NEXT TRACK",
 }
 
 var _font: Font
