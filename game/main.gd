@@ -222,6 +222,8 @@ var _replay_scrub_fwd_small_rect := Rect2()
 var _replay_scrub_fwd_rect := Rect2()
 var _replay_bar_rect := Rect2()
 var _replay_clock_center := Vector2.ZERO
+var _starfield: ColorRect
+var _starfield_mat: ShaderMaterial
 var _replay_seeking := false
 
 
@@ -253,6 +255,7 @@ func _set_game_over() -> void:
 func _ready() -> void:
 	title_font = ThemeDB.fallback_font
 	body_font = ThemeDB.fallback_font
+	_setup_starfield()
 	_load_leaderboard_greetings()
 	if replay_player != null:
 		replay_player.finished.connect(_on_replay_finished)
@@ -265,6 +268,39 @@ func _ready() -> void:
 		touch.suppress_play_taps(400)
 	queue_redraw()
 	get_viewport().size_changed.connect(_layout)
+
+
+func _setup_starfield() -> void:
+	var shader := load("res://game/fx/starfield.gdshader") as Shader
+	if shader == null:
+		return
+	_starfield_mat = ShaderMaterial.new()
+	_starfield_mat.shader = shader
+	_starfield = ColorRect.new()
+	_starfield.name = "Starfield"
+	_starfield.material = _starfield_mat
+	_starfield.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_starfield.show_behind_parent = true
+	_starfield.color = Color.WHITE
+	add_child(_starfield)
+	move_child(_starfield, 0)
+	_sync_starfield()
+
+
+func _sync_starfield() -> void:
+	if _starfield == null or _starfield_mat == null:
+		return
+	var vp := get_viewport_rect().size
+	var on_horizon := backdrop_mode == BackdropMode.HORIZON
+	_starfield.visible = on_horizon
+	if not on_horizon:
+		return
+	_starfield.position = Vector2.ZERO
+	_starfield.size = vp
+	# Match the ColorRect's local pixel space (VERTEX), not a possibly-scaled viewport.
+	_starfield_mat.set_shader_parameter("viewport_size", _starfield.size)
+	_starfield_mat.set_shader_parameter("horizon_y", _starfield.size.y * 0.38)
+	_starfield_mat.set_shader_parameter("time", pulse)
 
 
 func _apply_cell_metrics() -> void:
@@ -591,6 +627,7 @@ func toggle_juice() -> void:
 
 func cycle_backdrop() -> void:
 	backdrop_mode = ((int(backdrop_mode) + 1) % 3) as BackdropMode
+	_sync_starfield()
 	if music != null and music.has_method("show_status"):
 		music.show_status("BG %s" % _backdrop_mode_label())
 	queue_redraw()
@@ -692,6 +729,7 @@ func _horizon_scroll_speed() -> float:
 func _process(delta: float) -> void:
 	pulse += delta
 	backdrop_scroll += delta * _horizon_scroll_speed()
+	_sync_starfield()
 	if juice != null:
 		juice.tick(delta)
 	if game_over or paused or help_open or score_open or _highscores_open():
@@ -1380,29 +1418,19 @@ func _draw_backdrop_lines(vp: Vector2, accent: Color, alpha: float, width: float
 
 
 func _draw_backdrop_horizon(vp: Vector2) -> void:
-	# Synthwave-style perspective floor in Neon Stack cyan, rolling toward the player.
-	var sky_top := Color("050b12")
-	var sky_horizon := Color("0b1a28")
-	var steps := 18
-	for i in steps:
-		var t := float(i) / float(steps)
-		var band_h := vp.y / float(steps)
-		draw_rect(
-			Rect2(0.0, float(i) * band_h, vp.x, band_h + 1.0),
-			sky_top.lerp(sky_horizon, t * t)
-		)
-
+	# Sky + soft starfield come from the Starfield shader ColorRect behind this node.
+	# Here: horizon bloom, floor fill, and the rolling perspective grid.
 	var horizon := vp.y * 0.38
 	var vanish := Vector2(vp.x * 0.5, horizon)
 	var floor_h := maxf(1.0, vp.y - horizon)
 
-	var bloom_pulse := 0.55 + 0.12 * sin(pulse * 1.3)
-	draw_rect(Rect2(0.0, horizon - 28.0, vp.x, 56.0), Color("1ec8ff", 0.04 * bloom_pulse))
-	draw_rect(Rect2(0.0, horizon - 10.0, vp.x, 20.0), Color("8ef7ff", 0.08 * bloom_pulse))
-	draw_line(Vector2(0.0, horizon), Vector2(vp.x, horizon), Color("8ef7ff", 0.75), 2.0)
-	draw_line(Vector2(0.0, horizon), Vector2(vp.x, horizon), Color("1ec8ff", 0.35), 5.0)
+	# Floor starts at the horizon. Soft glow is lines only - wide bloom rects read as stripes.
+	draw_rect(Rect2(0.0, horizon, vp.x, floor_h), Color("071018"))
 
-	draw_rect(Rect2(0.0, horizon, vp.x, floor_h), Color("071018", 0.92))
+	var bloom_pulse := 0.55 + 0.12 * sin(pulse * 1.3)
+	draw_line(Vector2(0.0, horizon), Vector2(vp.x, horizon), Color("1ec8ff", 0.18 * bloom_pulse), 10.0)
+	draw_line(Vector2(0.0, horizon), Vector2(vp.x, horizon), Color("8ef7ff", 0.55), 2.0)
+	draw_line(Vector2(0.0, horizon), Vector2(vp.x, horizon), Color("1ec8ff", 0.3), 4.0)
 
 	var grid := Color("1ec8ff")
 	var grid_dim := Color("123047")
