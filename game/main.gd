@@ -478,7 +478,7 @@ func _hard_drop() -> void:
 	while _try_move(0, 1):
 		dist += 1
 	score += dist * 2
-	if juice != null and dist > 0 and not replay_mode:
+	if juice != null and dist > 0:
 		var col: Color = COLORS[piece_id]
 		juice.hard_drop(from_cells, _cells(piece_id, piece_rot, piece_pos), col, board_origin, cell_size)
 		juice.note_score(score, _board_center())
@@ -630,7 +630,7 @@ func _sim_tick() -> void:
 		if soft_timer <= 0.0:
 			if _try_move(0, 1):
 				score += 1
-				if juice != null and not replay_mode:
+				if juice != null:
 					juice.note_score(score, _board_center())
 			soft_timer = 0.035
 	else:
