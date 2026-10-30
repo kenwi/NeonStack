@@ -562,28 +562,44 @@ func _draw_replay_toggle_row(label_size: int) -> void:
 
 func _leaderboard_columns(panel: Rect2, ui_scale: float) -> Dictionary:
 	var pad := 16.0 * ui_scale
-	var gap := 10.0 * ui_scale
+	var gap := 8.0 * ui_scale
 	var inner_left := panel.position.x + pad
 	var inner_right := panel.end.x - pad
+	var body_size := maxi(12, int(round(15 * ui_scale)))
 	var rank_w := 40.0 * ui_scale
-	var score_w := 96.0 * ui_scale
-	var lv_w := 58.0 * ui_scale
-	var lines_w := 118.0 * ui_scale
-	var replay_col_w := 72.0 * ui_scale
-	var replay_btn_w := 64.0 * ui_scale
-	var time_w := 52.0 * ui_scale
+	# Name max is 16 chars; size the column to that, not leftover flex space.
+	var name_sample := "W".repeat(HighscoreConfig.MAX_PLAYER_NAME_LENGTH)
+	var name_w := 64.0 * ui_scale
+	if _body_font != null:
+		name_w = _body_font.get_string_size(
+			name_sample, HORIZONTAL_ALIGNMENT_LEFT, -1, body_size
+		).x
+	var date_sample := "00.00.0000 00:00"
+	var date_w := 120.0 * ui_scale
+	if _body_font != null:
+		date_w = _body_font.get_string_size(
+			date_sample, HORIZONTAL_ALIGNMENT_LEFT, -1, body_size
+		).x + 4.0 * ui_scale
+	var score_w := 92.0 * ui_scale
+	var lv_w := 52.0 * ui_scale
+	var lines_w := 108.0 * ui_scale
+	var replay_col_w := 68.0 * ui_scale
+	var replay_btn_w := 60.0 * ui_scale
+	var time_w := 48.0 * ui_scale
+	var name_x := inner_left + rank_w + gap
+	var date_x := name_x + name_w + gap
 	var time_x := inner_right - time_w
 	var replay_x := time_x - gap - replay_col_w
 	var lines_x := replay_x - gap - lines_w
 	var lv_x := lines_x - gap - lv_w
 	var score_x := lv_x - gap - score_w
-	var name_x := inner_left + rank_w + gap
-	var name_w := maxf(72.0 * ui_scale, score_x - gap - name_x)
 	return {
 		"rank_x": inner_left,
 		"rank_w": rank_w,
 		"name_x": name_x,
 		"name_w": name_w,
+		"date_x": date_x,
+		"date_w": date_w,
 		"score_x": score_x,
 		"score_w": score_w,
 		"lv_x": lv_x,
@@ -688,6 +704,7 @@ func _draw_leaderboard_panel(vp: Vector2) -> void:
 		var header_color := ColorTheme.muted()
 		_draw_leaderboard_col("#", cols.rank_x, y, cols.rank_w, header_size, header_color)
 		_draw_leaderboard_col("NAME", cols.name_x, y, cols.name_w, header_size, header_color)
+		_draw_leaderboard_col("DATE", cols.date_x, y, cols.date_w, header_size, header_color)
 		_draw_leaderboard_col("SCORE", cols.score_x, y, cols.score_w, header_size, header_color, true)
 		_draw_leaderboard_col("LEVEL", cols.lv_x, y, cols.lv_w, header_size, header_color, true)
 		_draw_leaderboard_col("LINES CLEARED", cols.lines_x, y, cols.lines_w, header_size, header_color, true)
@@ -712,6 +729,7 @@ func _draw_leaderboard_panel(vp: Vector2) -> void:
 			var elapsed: float = float(entry.get("elapsedSeconds", 0.0))
 			var has_replay: bool = bool(entry.get("hasReplay", false))
 			var checksum: String = str(entry.get("checksum", ""))
+			var submitted_at: String = _format_submitted_at(entry.get("submittedAt", ""))
 			var is_you := (
 				submitted_rank > 0
 				and rank == submitted_rank
@@ -722,6 +740,7 @@ func _draw_leaderboard_panel(vp: Vector2) -> void:
 			var muted := ColorTheme.gold(0.78) if is_you else ColorTheme.muted()
 			_draw_leaderboard_col("#%d" % rank, cols.rank_x, y, cols.rank_w, body_size, primary)
 			_draw_leaderboard_col(pname, cols.name_x, y, cols.name_w, body_size, primary)
+			_draw_leaderboard_col(submitted_at, cols.date_x, y, cols.date_w, body_size, muted)
 			_draw_leaderboard_col(
 				HighscoreConfig.format_score(score),
 				cols.score_x,
@@ -811,6 +830,46 @@ func _format_time(seconds: float) -> String:
 	var m := int(total / 60.0)
 	var s := total % 60
 	return "%d:%02d" % [m, s]
+
+
+## Norwegian date/time: DD.MM.YYYY HH:MM (local clock).
+func _format_submitted_at(raw: Variant) -> String:
+	var s := str(raw).strip_edges()
+	if s.is_empty() or s == "null":
+		return "-"
+	var cleaned := s
+	var t_pos := cleaned.find("T")
+	if t_pos >= 0:
+		var frac := cleaned.find(".", t_pos)
+		if frac >= 0:
+			var end := frac + 1
+			while end < cleaned.length():
+				var ch := cleaned.substr(end, 1)
+				if ch < "0" or ch > "9":
+					break
+				end += 1
+			cleaned = cleaned.substr(0, frac) + cleaned.substr(end)
+	var unix := Time.get_unix_time_from_datetime_string(cleaned)
+	if unix > 0.0:
+		var dt: Dictionary = Time.get_datetime_dict_from_unix_time(int(unix))
+		return "%02d.%02d.%04d %02d:%02d" % [
+			int(dt.get("day", 1)),
+			int(dt.get("month", 1)),
+			int(dt.get("year", 1970)),
+			int(dt.get("hour", 0)),
+			int(dt.get("minute", 0)),
+		]
+	# Fallback: parse ISO fragments without timezone conversion.
+	if t_pos < 0:
+		return "-"
+	var parts := cleaned.split("T")
+	if parts.size() < 2:
+		return "-"
+	var d := str(parts[0]).split("-")
+	var t := str(parts[1]).split(":")
+	if d.size() < 3 or t.size() < 2:
+		return "-"
+	return "%s.%s.%s %s:%s" % [d[2], d[1], d[0], t[0], t[1]]
 
 
 func _submit_score() -> void:
@@ -1175,9 +1234,9 @@ func _draw_name_field_chrome(field: Rect2, active: bool) -> void:
 func _layout_leaderboard(vp: Vector2) -> Rect2:
 	var ui_scale := _ui_scale
 	var touch_ui := PlayDevice.is_touch_primary()
-	var panel_w := minf(760.0 * ui_scale, vp.x - 24.0)
+	var panel_w := minf(900.0 * ui_scale, vp.x - 24.0)
 	if touch_ui:
-		panel_w = minf(maxf(640.0 * ui_scale, 320.0), vp.x - 12.0)
+		panel_w = minf(maxf(720.0 * ui_scale, 320.0), vp.x - 12.0)
 	var row_h := 28.0 * ui_scale
 	var header_h := 22.0 * ui_scale
 	var rows := clampi(entries.size(), 1, HighscoreConfig.LEADERBOARD_PAGE_SIZE)
