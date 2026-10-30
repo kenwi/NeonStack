@@ -1,4 +1,5 @@
 extends Node2D
+const ColorTheme = preload("res://game/theme/color_theme.gd")
 
 ## Playlist, mute, and volume for the in-game soundtrack.
 ## Track order is shuffled from the current time, then shuffled again after each full pass.
@@ -397,8 +398,8 @@ func _draw() -> void:
 	var pad_y := 8.0
 	var box_size := Vector2(text_size.x + pad_x * 2.0, text_size.y + pad_y * 2.0)
 	var box := Rect2(Vector2((vp.x - box_size.x) * 0.5, vp.y - box_size.y - _toast_bottom_inset()), box_size)
-	draw_rect(box, Color("0b1a28", 0.92 * alpha), true, -1.0, true)
-	draw_rect(box, Color("8ef7ff", 0.45 * alpha), false, 1.5, true)
+	draw_rect(box, ColorTheme.bg_panel(0.92 * alpha), true, -1.0, true)
+	draw_rect(box, ColorTheme.accent(0.45 * alpha), false, 1.5, true)
 	var baseline := box.position.y + pad_y + _font.get_ascent(font_size)
 	draw_string(
 		_font,
@@ -407,5 +408,5 @@ func _draw() -> void:
 		HORIZONTAL_ALIGNMENT_LEFT,
 		-1,
 		font_size,
-		Color("e8f7ff", alpha)
+		ColorTheme.text(alpha)
 	)

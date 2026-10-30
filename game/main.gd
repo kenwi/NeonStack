@@ -6,6 +6,7 @@ const PlayDevice = preload("res://game/platform/play_device.gd")
 const ReplayActions = preload("res://game/replay/actions.gd")
 const ReplayFormat = preload("res://game/replay/replay_format.gd")
 const HighscoreConfig = preload("res://game/highscore/highscore_config.gd")
+const ColorTheme = preload("res://game/theme/color_theme.gd")
 
 const COLS := 10
 const ROWS := 20
@@ -49,6 +50,7 @@ const HELP_KEYS := [
 	["F / F11", "Fullscreen"],
 	["J", "Toggle juice FX"],
 	["B", "Cycle background"],
+	["T", "Cycle color theme"],
 	["G", "Toggle rank greetings"],
 	["Q", "Quit"],
 	["H", "Toggle this help"],
@@ -70,6 +72,7 @@ const HELP_TOUCH := [
 	["Full", "Fullscreen"],
 	["Juice", "Toggle juice FX"],
 	["BG", "Cycle background"],
+	["Theme", "Cycle color theme"],
 	["Pause", "Pause"],
 	["Restart", "Restart"],
 	["Scores", "Highscores"],
@@ -255,6 +258,7 @@ func _set_game_over() -> void:
 func _ready() -> void:
 	title_font = ThemeDB.fallback_font
 	body_font = ThemeDB.fallback_font
+	ColorTheme.ensure_loaded()
 	_setup_starfield()
 	_load_leaderboard_greetings()
 	if replay_player != null:
@@ -301,6 +305,11 @@ func _sync_starfield() -> void:
 	_starfield_mat.set_shader_parameter("viewport_size", _starfield.size)
 	_starfield_mat.set_shader_parameter("horizon_y", _starfield.size.y * 0.38)
 	_starfield_mat.set_shader_parameter("time", pulse)
+	_starfield_mat.set_shader_parameter("sky_top_color", ColorTheme.sky_top())
+	_starfield_mat.set_shader_parameter("sky_horizon_color", ColorTheme.sky_horizon())
+	_starfield_mat.set_shader_parameter("star_cool_color", ColorTheme.star_cool())
+	_starfield_mat.set_shader_parameter("star_hot_color", ColorTheme.star_hot())
+	_starfield_mat.set_shader_parameter("star_core_color", ColorTheme.star_core())
 
 
 func _apply_cell_metrics() -> void:
@@ -552,7 +561,7 @@ func _lock_piece() -> void:
 	if clear_timer > 0.0:
 		return
 	var locked_cells: Array = _cells(piece_id, piece_rot, piece_pos)
-	var lock_color: Color = COLORS[piece_id] if COLORS.has(piece_id) else Color("8ef7ff")
+	var lock_color: Color = COLORS[piece_id] if COLORS.has(piece_id) else ColorTheme.accent()
 	for c in locked_cells:
 		if c.y < 0:
 			_set_game_over()
@@ -630,6 +639,22 @@ func cycle_backdrop() -> void:
 	_sync_starfield()
 	if music != null and music.has_method("show_status"):
 		music.show_status("BG %s" % _backdrop_mode_label())
+	queue_redraw()
+
+
+func cycle_theme() -> void:
+	var theme_name := ColorTheme.cycle()
+	_sync_starfield()
+	if highscores != null and highscores.has_method("apply_color_theme"):
+		highscores.apply_color_theme()
+	if music != null and music.has_method("show_status"):
+		music.show_status("Theme %s" % theme_name)
+	if touch != null:
+		touch.queue_redraw()
+	if juice != null:
+		juice.queue_redraw()
+	if highscores != null:
+		highscores.queue_redraw()
 	queue_redraw()
 
 
@@ -1207,6 +1232,10 @@ func _input(event: InputEvent) -> void:
 		cycle_backdrop()
 		get_viewport().set_input_as_handled()
 		return
+	if _key_pressed(event, KEY_T):
+		cycle_theme()
+		get_viewport().set_input_as_handled()
+		return
 	# Desktop native only: cycle level for backdrop / gravity tuning.
 	if not OS.has_feature("web") and _key_pressed(event, KEY_1):
 		level = 1 if level >= 15 else level + 1
@@ -1400,15 +1429,15 @@ func _draw() -> void:
 func _draw_backdrop(vp: Vector2) -> void:
 	match backdrop_mode:
 		BackdropMode.LINES_DIM:
-			_draw_backdrop_lines(vp, Color("123047"), 0.18, 1.0)
+			_draw_backdrop_lines(vp, ColorTheme.lines_dim(), 0.18, 1.0)
 		BackdropMode.LINES_BRIGHT:
-			_draw_backdrop_lines(vp, Color("1e4a6e"), 0.42, 1.25)
+			_draw_backdrop_lines(vp, ColorTheme.lines_bright(), 0.42, 1.25)
 		_:
 			_draw_backdrop_horizon(vp)
 
 
 func _draw_backdrop_lines(vp: Vector2, accent: Color, alpha: float, width: float) -> void:
-	draw_rect(Rect2(Vector2.ZERO, vp), Color("071018"))
+	draw_rect(Rect2(Vector2.ZERO, vp), ColorTheme.bg_deep())
 	var spacing := 54.0
 	var y := fposmod(pulse * 18.0, spacing) - spacing
 	while y < vp.y + spacing:
@@ -1425,15 +1454,15 @@ func _draw_backdrop_horizon(vp: Vector2) -> void:
 	var floor_h := maxf(1.0, vp.y - horizon)
 
 	# Floor starts at the horizon. Soft glow is lines only - wide bloom rects read as stripes.
-	draw_rect(Rect2(0.0, horizon, vp.x, floor_h), Color("071018"))
+	draw_rect(Rect2(0.0, horizon, vp.x, floor_h), ColorTheme.bg_deep())
 
 	var bloom_pulse := 0.55 + 0.12 * sin(pulse * 1.3)
-	draw_line(Vector2(0.0, horizon), Vector2(vp.x, horizon), Color("1ec8ff", 0.18 * bloom_pulse), 10.0)
-	draw_line(Vector2(0.0, horizon), Vector2(vp.x, horizon), Color("8ef7ff", 0.55), 2.0)
-	draw_line(Vector2(0.0, horizon), Vector2(vp.x, horizon), Color("1ec8ff", 0.3), 4.0)
+	draw_line(Vector2(0.0, horizon), Vector2(vp.x, horizon), ColorTheme.accent_hot(0.18 * bloom_pulse), 10.0)
+	draw_line(Vector2(0.0, horizon), Vector2(vp.x, horizon), ColorTheme.accent(0.55), 2.0)
+	draw_line(Vector2(0.0, horizon), Vector2(vp.x, horizon), ColorTheme.accent_hot(0.3), 4.0)
 
-	var grid := Color("1ec8ff")
-	var grid_dim := Color("123047")
+	var grid := ColorTheme.accent_hot()
+	var grid_dim := ColorTheme.lines_dim()
 
 	var ray_count := 14
 	var half_span := vp.x * 1.35
@@ -1469,7 +1498,7 @@ func _draw_backdrop_horizon(vp: Vector2) -> void:
 
 
 func _draw_backdrop_board_glow(base_a: float, pulse_a: float) -> void:
-	var glow := Color("1ec8ff")
+	var glow := ColorTheme.accent_hot()
 	glow.a = base_a + pulse_a * sin(pulse * 1.4)
 	draw_circle(_board_center() + Vector2(0, _board_size().y * -0.05), 280.0, glow)
 
@@ -1479,15 +1508,15 @@ func _draw_board_frame() -> void:
 	var board_w := COLS * cell_size
 	var board_h := ROWS * cell_size
 	var frame := Rect2(board_origin - Vector2(pad, pad), Vector2(board_w, board_h) + Vector2(pad, pad) * 2.0)
-	draw_rect(frame, Color("0b1a28"), true, -1.0, true)
-	draw_rect(frame.grow(3.0), Color("1ec8ff", 0.35), false, 2.0, true)
-	draw_rect(frame, Color("8ef7ff", 0.55), false, 1.5, true)
+	draw_rect(frame, ColorTheme.bg_panel(), true, -1.0, true)
+	draw_rect(frame.grow(3.0), ColorTheme.accent_hot(0.35), false, 2.0, true)
+	draw_rect(frame, ColorTheme.accent(0.55), false, 1.5, true)
 	for x in COLS + 1:
 		var px := board_origin.x + x * cell_size
-		draw_line(Vector2(px, board_origin.y), Vector2(px, board_origin.y + board_h), Color("123047", 0.55), 1.0)
+		draw_line(Vector2(px, board_origin.y), Vector2(px, board_origin.y + board_h), ColorTheme.bg_elevated(0.55), 1.0)
 	for y in ROWS + 1:
 		var py := board_origin.y + y * cell_size
-		draw_line(Vector2(board_origin.x, py), Vector2(board_origin.x + board_w, py), Color("123047", 0.55), 1.0)
+		draw_line(Vector2(board_origin.x, py), Vector2(board_origin.x + board_w, py), ColorTheme.bg_elevated(0.55), 1.0)
 
 
 func _draw_board_cells() -> void:
@@ -1593,8 +1622,8 @@ func _draw_mini(origin: Vector2, pid: String, cell: float) -> void:
 
 
 func _draw_panel(rect: Rect2, label: String, label_size: int = 18) -> void:
-	draw_rect(rect, Color("0b1a28", 0.92), true, -1.0, true)
-	draw_rect(rect, Color("8ef7ff", 0.35), false, 1.5, true)
+	draw_rect(rect, ColorTheme.bg_panel(0.92), true, -1.0, true)
+	draw_rect(rect, ColorTheme.accent(0.35), false, 1.5, true)
 	draw_string(
 		body_font,
 		rect.position + Vector2(PANEL_PAD_X * ui_scale, 22.0 * ui_scale),
@@ -1602,7 +1631,7 @@ func _draw_panel(rect: Rect2, label: String, label_size: int = 18) -> void:
 		HORIZONTAL_ALIGNMENT_LEFT,
 		-1,
 		label_size,
-		Color("8ef7ff")
+		ColorTheme.accent()
 	)
 
 
@@ -1659,7 +1688,7 @@ func _draw_side_panels() -> void:
 			HORIZONTAL_ALIGNMENT_LEFT,
 			-1,
 			row_size,
-			Color("e8f7ff")
+			ColorTheme.text()
 		)
 		draw_string(
 			body_font,
@@ -1668,14 +1697,14 @@ func _draw_side_panels() -> void:
 			HORIZONTAL_ALIGNMENT_RIGHT,
 			text_w,
 			row_size,
-			Color("e8f7ff")
+			ColorTheme.text()
 		)
 
 
 func _draw_hud() -> void:
-	draw_string(title_font, title_pos, "NEON STACK", HORIZONTAL_ALIGNMENT_LEFT, -1, title_size, Color("8ef7ff"))
+	draw_string(title_font, title_pos, "NEON STACK", HORIZONTAL_ALIGNMENT_LEFT, -1, title_size, ColorTheme.accent())
 	var hint := HELP_HINT_TOUCH if PlayDevice.is_touch_primary() else HELP_HINT
-	draw_string(body_font, hint_pos, hint, HORIZONTAL_ALIGNMENT_LEFT, -1, hint_size, Color("8ef7ff", 0.72))
+	draw_string(body_font, hint_pos, hint, HORIZONTAL_ALIGNMENT_LEFT, -1, hint_size, ColorTheme.accent(0.72))
 
 
 func _draw_centered_label(center: Vector2, text: String, font: Font, size: int, color: Color, y_offset: float = 0.0) -> void:
@@ -1772,8 +1801,8 @@ func _draw_info_table(vp: Vector2, title: String, rows: Array, footer: String) -
 	var row_size: int = int(layout.get("row_size", help_row_size))
 	var title_size_local: int = int(layout.get("title_size", help_title_size))
 	_touch_close_rect = close
-	draw_rect(panel, Color("0b1a28", 0.96), true, -1.0, true)
-	draw_rect(panel, Color("8ef7ff", 0.45), false, 1.5, true)
+	draw_rect(panel, ColorTheme.bg_panel(0.96), true, -1.0, true)
+	draw_rect(panel, ColorTheme.accent(0.45), false, 1.5, true)
 	draw_string(
 		title_font,
 		Vector2(panel.position.x + (panel_w - title_w) * 0.5, panel.position.y + pad_top + title_font.get_ascent(title_size_local)),
@@ -1781,13 +1810,13 @@ func _draw_info_table(vp: Vector2, title: String, rows: Array, footer: String) -
 		HORIZONTAL_ALIGNMENT_LEFT,
 		-1,
 		title_size_local,
-		Color("8ef7ff")
+		ColorTheme.accent()
 	)
 	var divider_y := panel.position.y + pad_top + title_h + 10.0 * ui_scale
 	draw_line(
 		Vector2(panel.position.x + pad_x, divider_y),
 		Vector2(panel.end.x - pad_x, divider_y),
-		Color("8ef7ff", 0.28),
+		ColorTheme.accent(0.28),
 		1.0
 	)
 	var table_w := left_w + col_gap + right_w
@@ -1807,13 +1836,13 @@ func _draw_info_table(vp: Vector2, title: String, rows: Array, footer: String) -
 		if i % 2 == 1:
 			draw_rect(
 				Rect2(Vector2(panel.position.x + 10.0, y - body_font.get_ascent(row_size) - 4.0), Vector2(panel_w - 20.0, row_h - 2.0)),
-				Color("123047", 0.35),
+				ColorTheme.bg_elevated(0.35),
 				true,
 				-1.0,
 				true
 			)
-		draw_string(body_font, Vector2(left_x, y), left, HORIZONTAL_ALIGNMENT_LEFT, -1, row_size, Color("8ef7ff"))
-		draw_string(body_font, Vector2(right_x, y), right, HORIZONTAL_ALIGNMENT_LEFT, -1, row_size, Color("e8f7ff"))
+		draw_string(body_font, Vector2(left_x, y), left, HORIZONTAL_ALIGNMENT_LEFT, -1, row_size, ColorTheme.accent())
+		draw_string(body_font, Vector2(right_x, y), right, HORIZONTAL_ALIGNMENT_LEFT, -1, row_size, ColorTheme.text())
 	if close.size.x > 0.0:
 		_draw_overlay_button(close, "CLOSE")
 	else:
@@ -1825,13 +1854,13 @@ func _draw_info_table(vp: Vector2, title: String, rows: Array, footer: String) -
 			HORIZONTAL_ALIGNMENT_LEFT,
 			-1,
 			hint_size,
-			Color("6a8799")
+			ColorTheme.muted()
 		)
 
 
 func _draw_overlay_button(rect: Rect2, label: String) -> void:
-	draw_rect(rect, Color("0b1a28", 0.96), true, -1.0, true)
-	draw_rect(rect, Color("8ef7ff", 0.7), false, 2.0, true)
+	draw_rect(rect, ColorTheme.bg_panel(0.96), true, -1.0, true)
+	draw_rect(rect, ColorTheme.accent(0.7), false, 2.0, true)
 	var size := 16
 	var text_w := body_font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x
 	var baseline := rect.position.y + (rect.size.y + body_font.get_ascent(size) - body_font.get_descent(size)) * 0.5
@@ -1842,7 +1871,7 @@ func _draw_overlay_button(rect: Rect2, label: String) -> void:
 		HORIZONTAL_ALIGNMENT_LEFT,
 		-1,
 		size,
-		Color("e8f7ff")
+		ColorTheme.text()
 	)
 
 
@@ -1859,9 +1888,9 @@ func _draw_stack_full_banner(center: Vector2, y_offset: float = 0.0) -> void:
 		text_w + pad_x * 2.0,
 		text_h + pad_y * 2.0
 	)
-	draw_rect(box, Color("0b1a28", 0.94), true, -1.0, true)
-	draw_rect(box, Color("fb7185", 0.95), false, maxf(2.5, 3.0 * ui_scale), true)
-	draw_rect(box.grow(4.0 * ui_scale), Color("fb7185", 0.28), false, maxf(1.0, 1.5 * ui_scale), true)
+	draw_rect(box, ColorTheme.bg_panel(0.94), true, -1.0, true)
+	draw_rect(box, ColorTheme.danger(0.95), false, maxf(2.5, 3.0 * ui_scale), true)
+	draw_rect(box.grow(4.0 * ui_scale), ColorTheme.danger(0.28), false, maxf(1.0, 1.5 * ui_scale), true)
 	var baseline := (
 		box.position.y
 		+ pad_y
@@ -1874,7 +1903,7 @@ func _draw_stack_full_banner(center: Vector2, y_offset: float = 0.0) -> void:
 		HORIZONTAL_ALIGNMENT_LEFT,
 		-1,
 		font_size,
-		Color("fb7185")
+		ColorTheme.danger()
 	)
 
 
@@ -1906,8 +1935,8 @@ func _draw_overlays(vp: Vector2) -> void:
 	if replay_mode:
 		_layout_replay_controls(vp)
 		if _replay_bar_rect.size.x > 0.0:
-			draw_rect(_replay_bar_rect, Color("0b1a28", 0.92), true, -1.0, true)
-			draw_rect(_replay_bar_rect, Color("8ef7ff", 0.35), false, 1.5, true)
+			draw_rect(_replay_bar_rect, ColorTheme.bg_panel(0.92), true, -1.0, true)
+			draw_rect(_replay_bar_rect, ColorTheme.accent(0.35), false, 1.5, true)
 		_draw_overlay_button(_replay_close_rect, "CLOSE")
 		_draw_overlay_button(_replay_scrub_back_rect, "-10s")
 		_draw_overlay_button(_replay_scrub_back_small_rect, "-2s")
@@ -1931,7 +1960,7 @@ func _draw_overlays(vp: Vector2) -> void:
 			HORIZONTAL_ALIGNMENT_LEFT,
 			-1,
 			clock_size,
-			Color("ffd166")
+			ColorTheme.gold()
 		)
 		if not PlayDevice.is_touch_primary() and _replay_bar_rect.size.x > 0.0:
 			var hint := "Up/Down speed   Left/Right scrub   Esc stop"
@@ -1947,13 +1976,13 @@ func _draw_overlays(vp: Vector2) -> void:
 				HORIZONTAL_ALIGNMENT_LEFT,
 				-1,
 				hint_size_px,
-				Color("6a8799")
+				ColorTheme.muted()
 			)
 	if paused and not replay_mode:
 		draw_rect(Rect2(Vector2.ZERO, vp), Color(0, 0, 0, 0.55))
-		_draw_centered_label(center, "PAUSED", title_font, 42, Color("8ef7ff"), -24.0)
+		_draw_centered_label(center, "PAUSED", title_font, 42, ColorTheme.accent(), -24.0)
 		var paused_hint := "Tap anywhere to resume" if PlayDevice.is_touch_primary() else "Any key resume    Esc / Q quit"
-		_draw_centered_label(center, paused_hint, body_font, 20, Color("e8f7ff"), 24.0)
+		_draw_centered_label(center, paused_hint, body_font, 20, ColorTheme.text(), 24.0)
 	if game_over and not replay_mode:
 		draw_rect(Rect2(Vector2.ZERO, vp), Color(0, 0, 0, 0.62))
 		var highscore_ui: bool = highscores != null and highscores.is_showing_overlay()
@@ -1962,6 +1991,6 @@ func _draw_overlays(vp: Vector2) -> void:
 			if _touch_restart_rect.size.x > 0.0:
 				_draw_overlay_button(_touch_restart_rect, "RESTART")
 			else:
-				_draw_centered_label(center, "R / Space / Enter restart    Esc / Q quit", body_font, 20, Color("e8f7ff"), 18.0)
+				_draw_centered_label(center, "R / Space / Enter restart    Esc / Q quit", body_font, 20, ColorTheme.text(), 18.0)
 	elif game_over and replay_mode:
 		_draw_stack_full_banner(center, 0.0)

@@ -1,4 +1,5 @@
 extends Node2D
+const ColorTheme = preload("res://game/theme/color_theme.gd")
 
 ## Visual juice for hard drops, locks, line clears, and score callouts.
 ## Toggleable; when off, all event hooks no-op and nothing is drawn.
@@ -22,7 +23,7 @@ var _bursts: Array = []
 var _floaters: Array = []
 var _banner_text := ""
 var _banner_timer := 0.0
-var _banner_color := Color("8ef7ff")
+var _banner_color := ColorTheme.accent()
 var _level_flash_timer := 0.0
 var _level_flash_level := 1
 var _milestone_flash_timer := 0.0
@@ -146,9 +147,9 @@ func line_clear_scored(cleared: int, points: int, board_center: Vector2) -> void
 		return
 	_combo += 1
 	var label: String = CLEAR_NAMES[cleared] if cleared < CLEAR_NAMES.size() else "%d LINES" % cleared
-	var color := Color("8ef7ff")
+	var color := ColorTheme.accent()
 	if cleared >= 4:
-		color = Color("ffd166")
+		color = ColorTheme.gold()
 		_banner_text = "TETRIS"
 		_banner_timer = 0.9
 		_banner_color = color
@@ -169,7 +170,7 @@ func line_clear_scored(cleared: int, points: int, board_center: Vector2) -> void
 		"text": "+%d" % points,
 		"pos": board_center + Vector2(0, 18.0),
 		"vel": Vector2(0, -42.0),
-		"color": Color("e8f7ff"),
+		"color": ColorTheme.text(),
 		"life": 0.9,
 		"max_life": 0.9,
 		"size": 36,
@@ -179,7 +180,7 @@ func line_clear_scored(cleared: int, points: int, board_center: Vector2) -> void
 			"text": "COMBO x%d" % _combo,
 			"pos": board_center + Vector2(0, 64.0),
 			"vel": Vector2(0, -34.0),
-			"color": Color("ffd166"),
+			"color": ColorTheme.gold(),
 			"life": 1.0,
 			"max_life": 1.0,
 			"size": 44,
@@ -200,7 +201,7 @@ func level_up(level: int, board_center: Vector2) -> void:
 		"text": "LEVEL %d" % level,
 		"pos": board_center + Vector2(0, -72.0),
 		"vel": Vector2(0, -28.0),
-		"color": Color("ffd166"),
+		"color": ColorTheme.gold(),
 		"life": 1.2,
 		"max_life": 1.2,
 		"size": 52,
@@ -223,7 +224,7 @@ func note_score(score: int, board_center: Vector2) -> void:
 		"text": _format_milestone(_milestone_flash_score),
 		"pos": board_center + Vector2(0, 96.0),
 		"vel": Vector2(0, -40.0),
-		"color": Color("8ef7ff"),
+		"color": ColorTheme.accent(),
 		"life": 1.15,
 		"max_life": 1.15,
 		"size": 48,
@@ -236,7 +237,7 @@ func announce_rank(rank: int, board_center: Vector2) -> void:
 		return
 	_milestone_flash_timer = 1.05
 	var label := "TOP 10!" if rank == 10 else "#%d" % rank
-	var color := Color("ffd166") if rank <= 3 else Color("8ef7ff")
+	var color := ColorTheme.gold() if rank <= 3 else ColorTheme.accent()
 	_floaters.append({
 		"text": label,
 		"pos": board_center + Vector2(0, -40.0),
@@ -260,12 +261,12 @@ func announce_new_record(board_center: Vector2) -> void:
 	_level_flash_level = 1
 	_banner_text = "NEW #1"
 	_banner_timer = 1.35
-	_banner_color = Color("ffd166")
+	_banner_color = ColorTheme.gold()
 	_floaters.append({
 		"text": "NEW RECORD",
 		"pos": board_center + Vector2(0, 28.0),
 		"vel": Vector2(0, -36.0),
-		"color": Color("ffd166"),
+		"color": ColorTheme.gold(),
 		"life": 1.4,
 		"max_life": 1.4,
 		"size": 48,
@@ -335,26 +336,26 @@ func draw_fx(host: CanvasItem) -> void:
 		var life := clampf(_level_flash_timer / 1.1, 0.0, 1.0)
 		# Two-beat flash: bright hit, brief dip, second wash.
 		var beat := absf(sin((1.0 - life) * PI * 2.0))
-		var wash := Color("ffd166", 0.12 + 0.22 * beat * life)
+		var wash := ColorTheme.gold(0.12 + 0.22 * beat * life)
 		host.draw_rect(Rect2(Vector2.ZERO, host.get_viewport_rect().size), wash, true, -1.0, true)
 		var frame_parent := get_parent()
 		if frame_parent != null and "board_origin" in frame_parent and "cell_size" in frame_parent:
 			var origin: Vector2 = frame_parent.board_origin
 			var cell: float = float(frame_parent.cell_size)
 			var board := Rect2(origin, Vector2(10.0 * cell, 20.0 * cell))
-			var rim := Color("8ef7ff", 0.35 + 0.55 * beat * life)
+			var rim := ColorTheme.accent(0.35 + 0.55 * beat * life)
 			host.draw_rect(board.grow(6.0 + 10.0 * beat), rim, false, 3.0 + 4.0 * beat, true)
 	if _milestone_flash_timer > 0.0:
 		var m_life := clampf(_milestone_flash_timer / 1.0, 0.0, 1.0)
 		var m_beat := absf(sin((1.0 - m_life) * PI * 2.0))
-		var m_wash := Color("8ef7ff", 0.10 + 0.20 * m_beat * m_life)
+		var m_wash := ColorTheme.accent(0.10 + 0.20 * m_beat * m_life)
 		host.draw_rect(Rect2(Vector2.ZERO, host.get_viewport_rect().size), m_wash, true, -1.0, true)
 		var m_parent := get_parent()
 		if m_parent != null and "board_origin" in m_parent and "cell_size" in m_parent:
 			var m_origin: Vector2 = m_parent.board_origin
 			var m_cell: float = float(m_parent.cell_size)
 			var m_board := Rect2(m_origin, Vector2(10.0 * m_cell, 20.0 * m_cell))
-			var m_rim := Color("ffd166", 0.30 + 0.50 * m_beat * m_life)
+			var m_rim := ColorTheme.gold(0.30 + 0.50 * m_beat * m_life)
 			host.draw_rect(m_board.grow(5.0 + 8.0 * m_beat), m_rim, false, 2.5 + 3.0 * m_beat, true)
 	for item in _trail:
 		var life := float(item.life) / float(item.max_life)

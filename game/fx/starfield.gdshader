@@ -1,12 +1,15 @@
 shader_type canvas_item;
 render_mode unshaded, blend_mix;
 
-// Soft bokeh starfield (Neon Stack cyan).
-// Local VERTEX pixels keep discs circular; point list avoids cell-edge squares.
-// Polynomial falloff stays stable on GLES3 mediump (exp can brick into blocks).
+// Soft bokeh starfield. Palette colors come from ColorTheme uniforms.
 uniform vec2 viewport_size = vec2(1280.0, 800.0);
 uniform float horizon_y = 300.0;
 uniform float time = 0.0;
+uniform vec3 sky_top_color = vec3(0.02, 0.043, 0.071);
+uniform vec3 sky_horizon_color = vec3(0.027, 0.063, 0.094);
+uniform vec3 star_cool_color = vec3(0.118, 0.784, 1.0);
+uniform vec3 star_hot_color = vec3(0.557, 0.969, 1.0);
+uniform vec3 star_core_color = vec3(0.92, 0.98, 1.0);
 
 varying vec2 v_pixel;
 
@@ -28,7 +31,6 @@ vec3 star_at(float fi, vec2 pixel, float hy, float width) {
 	float vy = hash21(vec2(fi * 3.17, 7.71));
 	float size_n = hash21(vec2(fi, 19.2));
 
-	// Keep whole halo above the floor clip so orbs are not sliced by a hard horizon seam.
 	float margin = 38.0;
 	float y_span = max(hy - margin, 1.0);
 	float y_t = 1.0 - pow(1.0 - vy, 2.5);
@@ -42,10 +44,7 @@ vec3 star_at(float fi, vec2 pixel, float hy, float width) {
 	float tw = 0.86 + 0.14 * sin(time * (1.25 + size_n) + fi);
 	float strength = (core * 0.9 + halo) * tw * mix(0.22, 1.05, star_near * star_near);
 
-	vec3 cool = vec3(0.118, 0.784, 1.0);
-	vec3 hot = vec3(0.557, 0.969, 1.0);
-	vec3 white = vec3(0.92, 0.98, 1.0);
-	vec3 tint = mix(cool, mix(hot, white, size_n), star_near);
+	vec3 tint = mix(star_cool_color, mix(star_hot_color, star_core_color, size_n), star_near);
 	return tint * strength;
 }
 
@@ -53,15 +52,11 @@ void fragment() {
 	vec2 pixel = v_pixel;
 	float hy = max(horizon_y, 1.0);
 	float width = max(viewport_size.x, 1.0);
-	// Opaque sky only; no mid-glow alpha cut (floor draws below hy in main).
 	float above = step(pixel.y, hy);
 
 	float near = clamp(pixel.y / hy, 0.0, 1.0);
-	vec3 sky_top = vec3(0.02, 0.043, 0.071);
-	// Match floor fill Color("071018") so the sky/floor join does not flash a band.
-	vec3 sky_horizon = vec3(0.027, 0.063, 0.094);
-	vec3 sky = mix(sky_top, sky_horizon, near * near);
-	sky += vec3(0.118, 0.784, 1.0) * (smoothstep(0.62, 1.0, near) * 0.08);
+	vec3 sky = mix(sky_top_color, sky_horizon_color, near * near);
+	sky += star_cool_color * (smoothstep(0.62, 1.0, near) * 0.08);
 
 	vec3 glow = vec3(0.0);
 	glow += star_at(1.0, pixel, hy, width);

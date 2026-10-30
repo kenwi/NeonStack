@@ -6,6 +6,7 @@ const HighscoreConfig = preload("res://game/highscore/highscore_config.gd")
 const HighscoreChecksum = preload("res://game/highscore/highscore_checksum.gd")
 const PlayDevice = preload("res://game/platform/play_device.gd")
 const ReplayFormat = preload("res://game/replay/replay_format.gd")
+const ColorTheme = preload("res://game/theme/color_theme.gd")
 
 enum Phase { IDLE, NAME_ENTRY, SUBMITTING, LEADERBOARD }
 
@@ -36,6 +37,7 @@ var _live_ranks_gen := 0
 var live_top_scores: Array[int] = []
 var _submit_lock := false
 var _name_edit: LineEdit
+var _name_field_style: StyleBoxFlat
 var _editing_name := false
 var _tab_classic_rect := Rect2()
 var _tab_mobile_rect := Rect2()
@@ -68,26 +70,33 @@ func _ready() -> void:
 	_name_edit.virtual_keyboard_show_on_focus = true
 	_name_edit.mouse_filter = Control.MOUSE_FILTER_STOP
 	_name_edit.placeholder_text = "Your name"
-	var field := StyleBoxFlat.new()
-	field.bg_color = Color("071018")
-	field.border_color = Color("8ef7ff", 0.85)
-	field.set_border_width_all(2)
-	field.set_corner_radius_all(4)
-	field.content_margin_left = 10.0
-	field.content_margin_right = 10.0
-	field.content_margin_top = 6.0
-	field.content_margin_bottom = 6.0
-	_name_edit.add_theme_stylebox_override("normal", field)
-	_name_edit.add_theme_stylebox_override("focus", field)
-	_name_edit.add_theme_color_override("font_color", Color("ffd166"))
-	_name_edit.add_theme_color_override("font_placeholder_color", Color("6a8799"))
-	_name_edit.add_theme_color_override("caret_color", Color("8ef7ff"))
+	_name_field_style = StyleBoxFlat.new()
+	_name_field_style.set_border_width_all(2)
+	_name_field_style.set_corner_radius_all(4)
+	_name_field_style.content_margin_left = 10.0
+	_name_field_style.content_margin_right = 10.0
+	_name_field_style.content_margin_top = 6.0
+	_name_field_style.content_margin_bottom = 6.0
+	_name_edit.add_theme_stylebox_override("normal", _name_field_style)
+	_name_edit.add_theme_stylebox_override("focus", _name_field_style)
 	_name_edit.add_theme_constant_override("caret_width", 3)
 	_name_edit.text_changed.connect(_on_name_text_changed)
 	_name_edit.text_submitted.connect(_on_name_submitted)
 	add_child(_name_edit)
+	apply_color_theme()
 	player_name = _load_player_name()
 	refresh_live_ranks()
+
+
+func apply_color_theme() -> void:
+	if _name_field_style != null:
+		_name_field_style.bg_color = ColorTheme.bg_deep()
+		_name_field_style.border_color = ColorTheme.accent(0.85)
+	if _name_edit != null:
+		_name_edit.add_theme_color_override("font_color", ColorTheme.gold())
+		_name_edit.add_theme_color_override("font_placeholder_color", ColorTheme.muted())
+		_name_edit.add_theme_color_override("caret_color", ColorTheme.accent())
+	queue_redraw()
 
 
 func set_ui_scale(ui_scale: float) -> void:
@@ -457,22 +466,22 @@ func _draw_name_panel(vp: Vector2) -> void:
 	var panel := _layout_name_targets(vp)
 	var ui_scale := _ui_scale
 	var touch_ui := PlayDevice.is_touch_primary()
-	draw_rect(panel, Color("0b1a28", 0.94), true, -1.0, true)
-	draw_rect(panel, Color("8ef7ff", 0.55), false, maxf(1.0, 2.0 * ui_scale), true)
+	draw_rect(panel, ColorTheme.bg_panel(0.94), true, -1.0, true)
+	draw_rect(panel, ColorTheme.accent(0.55), false, maxf(1.0, 2.0 * ui_scale), true)
 
 	var title_size := maxi(18, int(round(26 * ui_scale)))
 	var body_size := maxi(14, int(round(18 * ui_scale)))
 	var hint_size := maxi(12, int(round(14 * ui_scale)))
 	var cx := panel.get_center().x
 	var y := panel.position.y + 36.0 * ui_scale
-	_draw_centered(_title_font, Vector2(cx, y), "ENTER NAME", title_size, Color("8ef7ff"))
+	_draw_centered(_title_font, Vector2(cx, y), "ENTER NAME", title_size, ColorTheme.accent())
 	y += 42.0 * ui_scale
 	_draw_centered(
 		_body_font,
 		Vector2(cx, y),
 		"Score %s" % HighscoreConfig.format_score(pending_score),
 		body_size,
-		Color("e8f7ff")
+		ColorTheme.text()
 	)
 	_draw_replay_toggle_row(body_size)
 	if touch_ui and phase == Phase.NAME_ENTRY:
@@ -491,10 +500,10 @@ func _draw_name_panel(vp: Vector2) -> void:
 	if phase == Phase.SUBMITTING:
 		display = HighscoreChecksum.sanitize_player_name(player_name)
 	var text_size := maxi(14, int(round(18.0 * ui_scale)))
-	var text_color := Color("ffd166")
+	var text_color := ColorTheme.gold()
 	if display.is_empty() and phase == Phase.NAME_ENTRY:
 		display = "Your name"
-		text_color = Color("6a8799")
+		text_color = ColorTheme.muted()
 	var text_w := _body_font.get_string_size(display, HORIZONTAL_ALIGNMENT_LEFT, -1, text_size).x
 	var text_baseline := field.position.y + (field.size.y + _body_font.get_ascent(text_size) - _body_font.get_descent(text_size)) * 0.5
 	var text_x := field.get_center().x - text_w * 0.5
@@ -510,7 +519,7 @@ func _draw_name_panel(vp: Vector2) -> void:
 			maxf(3.0, 3.0 * ui_scale),
 			caret_h
 		)
-		draw_rect(caret, Color("8ef7ff"), true, -1.0, true)
+		draw_rect(caret, ColorTheme.accent(), true, -1.0, true)
 	if phase == Phase.NAME_ENTRY or phase == Phase.SUBMITTING:
 		_draw_choice(_skip_rect, "SKIP", false)
 		_draw_choice(_submit_rect, "SUBMIT", true)
@@ -521,7 +530,7 @@ func _draw_name_panel(vp: Vector2) -> void:
 			Vector2(cx, _submit_rect.position.y - 14.0 * ui_scale),
 			status,
 			hint_size,
-			Color("6a8799")
+			ColorTheme.muted()
 		)
 
 
@@ -542,7 +551,7 @@ func _draw_replay_toggle_row(label_size: int) -> void:
 		HORIZONTAL_ALIGNMENT_LEFT,
 		-1,
 		label_size,
-		Color("e8f7ff")
+		ColorTheme.text()
 	)
 	_draw_choice(
 		_replay_toggle_rect,
@@ -633,15 +642,15 @@ func _draw_leaderboard_panel(vp: Vector2) -> void:
 	var panel := _layout_leaderboard(vp)
 	var ui_scale := _ui_scale
 	var touch_ui := PlayDevice.is_touch_primary()
-	draw_rect(panel, Color("0b1a28", 0.94), true, -1.0, true)
-	draw_rect(panel, Color("8ef7ff", 0.55), false, maxf(1.0, 2.0 * ui_scale), true)
+	draw_rect(panel, ColorTheme.bg_panel(0.94), true, -1.0, true)
+	draw_rect(panel, ColorTheme.accent(0.55), false, maxf(1.0, 2.0 * ui_scale), true)
 
 	var title_size := maxi(18, int(round(26 * ui_scale)))
 	var body_size := maxi(12, int(round(15 * ui_scale)))
 	var header_size := maxi(10, int(round(12 * ui_scale)))
 	var hint_size := maxi(11, int(round(13 * ui_scale)))
 	var y := panel.position.y + 28.0 * ui_scale
-	_draw_centered(_title_font, Vector2(panel.get_center().x, y), _board_title(), title_size, Color("8ef7ff"))
+	_draw_centered(_title_font, Vector2(panel.get_center().x, y), _board_title(), title_size, ColorTheme.accent())
 	_draw_choice(_tab_classic_rect, "CLASSIC", view_mode_id != HighscoreConfig.MODE_ID_MOBILE)
 	_draw_choice(_tab_mobile_rect, "MOBILE", view_mode_id == HighscoreConfig.MODE_ID_MOBILE)
 	y = _tab_classic_rect.end.y + 22.0 * ui_scale
@@ -651,11 +660,11 @@ func _draw_leaderboard_panel(vp: Vector2) -> void:
 			Vector2(panel.get_center().x, y),
 			"Your rank #%d" % submitted_rank,
 			body_size,
-			Color("ffd166")
+			ColorTheme.gold()
 		)
 		y += 24.0 * ui_scale
 	elif not status_text.is_empty():
-		_draw_centered(_body_font, Vector2(panel.get_center().x, y), status_text, body_size, Color("fb7185"))
+		_draw_centered(_body_font, Vector2(panel.get_center().x, y), status_text, body_size, ColorTheme.danger())
 		y += 24.0 * ui_scale
 
 	var pager_h := 0.0
@@ -671,12 +680,12 @@ func _draw_leaderboard_panel(vp: Vector2) -> void:
 			Vector2(panel.get_center().x, y + 20.0 * ui_scale),
 			"No scores yet",
 			body_size,
-			Color("6a8799")
+			ColorTheme.muted()
 		)
 	else:
 		var cols := _leaderboard_columns(panel, ui_scale)
 		var row_h := 28.0 * ui_scale
-		var header_color := Color("6a8799")
+		var header_color := ColorTheme.muted()
 		_draw_leaderboard_col("#", cols.rank_x, y, cols.rank_w, header_size, header_color)
 		_draw_leaderboard_col("NAME", cols.name_x, y, cols.name_w, header_size, header_color)
 		_draw_leaderboard_col("SCORE", cols.score_x, y, cols.score_w, header_size, header_color, true)
@@ -687,7 +696,7 @@ func _draw_leaderboard_panel(vp: Vector2) -> void:
 		draw_line(
 			Vector2(panel.position.x + 14.0 * ui_scale, y - 8.0 * ui_scale),
 			Vector2(panel.end.x - 14.0 * ui_scale, y - 8.0 * ui_scale),
-			Color("8ef7ff", 0.25),
+			ColorTheme.accent(0.25),
 			1.0,
 			true
 		)
@@ -708,9 +717,9 @@ func _draw_leaderboard_panel(vp: Vector2) -> void:
 				and rank == submitted_rank
 				and view_mode_id == submit_mode_id
 			)
-			var primary := Color("ffd166") if is_you else Color("e8f7ff")
-			var accent := Color("ffd166") if is_you else Color("8ef7ff")
-			var muted := Color("ffd166", 0.78) if is_you else Color("6a8799")
+			var primary := ColorTheme.gold() if is_you else ColorTheme.text()
+			var accent := ColorTheme.gold() if is_you else ColorTheme.accent()
+			var muted := ColorTheme.gold(0.78) if is_you else ColorTheme.muted()
 			_draw_leaderboard_col("#%d" % rank, cols.rank_x, y, cols.rank_w, body_size, primary)
 			_draw_leaderboard_col(pname, cols.name_x, y, cols.name_w, body_size, primary)
 			_draw_leaderboard_col(
@@ -766,7 +775,7 @@ func _draw_leaderboard_panel(vp: Vector2) -> void:
 			Vector2(panel.get_center().x, panel.end.y - 16.0 * ui_scale),
 			footer,
 			hint_size,
-			Color("6a8799")
+			ColorTheme.muted()
 		)
 
 
@@ -1148,15 +1157,15 @@ func _layout_name_targets(vp: Vector2) -> Rect2:
 func _draw_name_field_chrome(field: Rect2, active: bool) -> void:
 	if field.size.x <= 0.0:
 		return
-	var fill := Color("071018", 0.98)
-	var border := Color("8ef7ff", 0.95) if active else Color("8ef7ff", 0.45)
+	var fill := ColorTheme.bg_deep(0.98)
+	var border := ColorTheme.accent(0.95) if active else ColorTheme.accent(0.45)
 	draw_rect(field, fill, true, -1.0, true)
 	draw_rect(field, border, false, maxf(2.0, 2.0 * _ui_scale), true)
 	if active and name_cursor_on:
 		# Outer pulse so the active field is easy to spot behind the keyboard.
 		draw_rect(
 			field.grow(3.0 * _ui_scale),
-			Color("8ef7ff", 0.22),
+			ColorTheme.accent(0.22),
 			false,
 			maxf(1.0, 1.5 * _ui_scale),
 			true
@@ -1213,13 +1222,13 @@ func _layout_leaderboard(vp: Vector2) -> Rect2:
 func _draw_choice(rect: Rect2, label: String, selected: bool, font_size: int = 14) -> void:
 	if rect.size.x <= 0.0:
 		return
-	var fill := Color("123047", 0.96) if selected else Color("071018", 0.94)
-	var border := Color("8ef7ff", 0.9) if selected else Color("8ef7ff", 0.4)
+	var fill := ColorTheme.bg_elevated(0.96) if selected else ColorTheme.bg_deep(0.94)
+	var border := ColorTheme.accent(0.9) if selected else ColorTheme.accent(0.4)
 	draw_rect(rect, fill, true, -1.0, true)
 	draw_rect(rect, border, false, 2.0, true)
 	var size := font_size
 	var baseline := rect.position.y + (rect.size.y + _body_font.get_ascent(size) - _body_font.get_descent(size)) * 0.5
-	_draw_centered(_body_font, Vector2(rect.get_center().x, baseline), label, size, Color("e8f7ff"))
+	_draw_centered(_body_font, Vector2(rect.get_center().x, baseline), label, size, ColorTheme.text())
 
 
 func _filter_name_live(value: String) -> String:

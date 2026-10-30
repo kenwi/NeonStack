@@ -7,6 +7,7 @@ extends Node2D
 
 const PlayDevice = preload("res://game/platform/play_device.gd")
 const ReplayActions = preload("res://game/replay/actions.gd")
+const ColorTheme = preload("res://game/theme/color_theme.gd")
 
 const GAP := 8.0
 const MIN_BUTTON := 44.0
@@ -25,7 +26,7 @@ const HOLD_ACTIONS := {
 const TAP_ACTIONS := ["rot", "ccw", "drop", "hold"]
 const UTILITY := ["pause", "help", "scores", "restart", "mute", "full", "zones", "scale_down", "scale_up"]
 ## Kept on its own row under the crowded utility strip.
-const UTILITY_BELOW := ["next", "juice", "bg"]
+const UTILITY_BELOW := ["next", "juice", "bg", "theme"]
 const LABELS := {
 	"left": "<",
 	"right": ">",
@@ -44,6 +45,7 @@ const LABELS := {
 	"next": "NEXT TRACK",
 	"juice": "JUICE",
 	"bg": "BG",
+	"theme": "THEME",
 }
 
 var _font: Font
@@ -275,6 +277,10 @@ func _on_press(id: String) -> void:
 	elif id == "bg":
 		if main.has_method("cycle_backdrop"):
 			main.cycle_backdrop()
+		queue_redraw()
+	elif id == "theme":
+		if main.has_method("cycle_theme"):
+			main.cycle_theme()
 		queue_redraw()
 	elif id == "full":
 		main._toggle_fullscreen()
@@ -576,11 +582,11 @@ func _draw_zone_guides() -> void:
 	if zone.size.y <= 1.0:
 		return
 	var mid := zone.get_center()
-	var line := Color("8ef7ff", 0.35)
+	var line := ColorTheme.accent(0.35)
 	draw_line(Vector2(mid.x, zone.position.y), Vector2(mid.x, zone.end.y), line, 2.0, true)
 	draw_line(Vector2(zone.position.x, mid.y), Vector2(zone.end.x, mid.y), line, 2.0, true)
 	# Light frame so the zone stops clearly above/below the button rows.
-	draw_rect(zone, Color("8ef7ff", 0.18), false, 2.0, true)
+	draw_rect(zone, ColorTheme.accent(0.18), false, 2.0, true)
 	var half := zone.size * 0.5
 	var labels := [
 		["<", Vector2(zone.position.x + half.x * 0.5, zone.position.y + half.y * 0.5)],
@@ -598,7 +604,7 @@ func _draw_zone_guides() -> void:
 		if drop_w <= max_w and drop_h <= max_h:
 			break
 		size -= 2
-	var tint := Color("8ef7ff", 0.5)
+	var tint := ColorTheme.accent(0.5)
 	for entry in labels:
 		var text := str(entry[0])
 		var center: Vector2 = entry[1]
@@ -635,6 +641,8 @@ func _button_label(id: String, paused: bool) -> String:
 				_:
 					return "BG GRID"
 		return "BG"
+	if id == "theme":
+		return ColorTheme.short_label()
 	if id == "scale_down":
 		return "%dx" % (maxi(SCALE_MIN, _scale - 1) if _scale > SCALE_MIN else _scale)
 	if id == "scale_up":
@@ -651,8 +659,8 @@ func _is_fullscreen() -> bool:
 
 
 func _draw_button(rect: Rect2, label: String, pressed: bool) -> void:
-	var fill := Color("123047", 0.96) if pressed else Color("0b1a28", 0.92)
-	var border := Color("8ef7ff", 0.9) if pressed else Color("8ef7ff", 0.5)
+	var fill := ColorTheme.bg_elevated(0.96) if pressed else ColorTheme.bg_panel(0.92)
+	var border := ColorTheme.accent(0.9) if pressed else ColorTheme.accent(0.5)
 	draw_rect(rect, fill, true, -1.0, true)
 	draw_rect(rect, border, false, 2.0, true)
 	var size := _fit_font(label, rect.size.x, clampi(int(rect.size.y * 0.32), 12, 42))
@@ -665,7 +673,7 @@ func _draw_button(rect: Rect2, label: String, pressed: bool) -> void:
 		HORIZONTAL_ALIGNMENT_LEFT,
 		-1,
 		size,
-		Color("e8f7ff")
+		ColorTheme.text()
 	)
 
 
