@@ -4,7 +4,7 @@ extends RefCounted
 const API_BASE_URL := "https://neonstack-highscores.m0b.tech"
 const MODE_ID := "classic"
 const MODE_ID_MOBILE := "classic-mobile"
-const DEFAULT_TOP_COUNT := 10
+const DEFAULT_TOP_COUNT := 20
 const MAX_PLAYER_NAME_LENGTH := 16
 const PLAYER_NAME_PATH := "user://highscore.cfg"
 const PLAYER_NAME_SECTION := "player"
