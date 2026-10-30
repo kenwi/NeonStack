@@ -241,13 +241,16 @@ func _on_press(id: String) -> void:
 
 func _tap_quadrant(pos: Vector2) -> bool:
 	# Upper half nudges one column. Lower half rotates or hard-drops.
-	# Buttons already won the hit test, so this is only the open screen.
+	# Zones live only in the open play band between the top and bottom buttons.
 	if not _can_play():
 		return false
+	var zone := _play_zone_rect()
+	if zone.size.y <= 1.0 or not zone.has_point(pos):
+		return false
 	var main := get_parent()
-	var vp := get_viewport_rect().size
-	var left := pos.x < vp.x * 0.5
-	var upper := pos.y < vp.y * 0.5
+	var mid := zone.get_center()
+	var left := pos.x < mid.x
+	var upper := pos.y < mid.y
 	if upper:
 		main._try_move(-1 if left else 1, 0)
 	elif left:
@@ -255,6 +258,15 @@ func _tap_quadrant(pos: Vector2) -> bool:
 	else:
 		main._hard_drop()
 	return true
+
+
+func _play_zone_rect() -> Rect2:
+	var vp := get_viewport_rect().size
+	var top := utility_height()
+	var bottom := vp.y - band_height(vp.x)
+	if bottom <= top:
+		return Rect2()
+	return Rect2(0.0, top, vp.x, bottom - top)
 
 
 func _can_play() -> bool:
@@ -484,20 +496,25 @@ func _draw() -> void:
 
 
 func _draw_zone_guides() -> void:
-	var vp := get_viewport_rect().size
-	var mid := Vector2(vp.x * 0.5, vp.y * 0.5)
+	var zone := _play_zone_rect()
+	if zone.size.y <= 1.0:
+		return
+	var mid := zone.get_center()
 	var line := Color("8ef7ff", 0.35)
-	draw_line(Vector2(mid.x, 0.0), Vector2(mid.x, vp.y), line, 2.0, true)
-	draw_line(Vector2(0.0, mid.y), Vector2(vp.x, mid.y), line, 2.0, true)
+	draw_line(Vector2(mid.x, zone.position.y), Vector2(mid.x, zone.end.y), line, 2.0, true)
+	draw_line(Vector2(zone.position.x, mid.y), Vector2(zone.end.x, mid.y), line, 2.0, true)
+	# Light frame so the zone stops clearly above/below the button rows.
+	draw_rect(zone, Color("8ef7ff", 0.18), false, 2.0, true)
+	var half := zone.size * 0.5
 	var labels := [
-		["<", Vector2(mid.x * 0.5, mid.y * 0.5)],
-		[">", Vector2(mid.x + mid.x * 0.5, mid.y * 0.5)],
-		["ROT", Vector2(mid.x * 0.5, mid.y + mid.y * 0.5)],
-		["DROP", Vector2(mid.x + mid.x * 0.5, mid.y + mid.y * 0.5)],
+		["<", Vector2(zone.position.x + half.x * 0.5, zone.position.y + half.y * 0.5)],
+		[">", Vector2(mid.x + half.x * 0.5, zone.position.y + half.y * 0.5)],
+		["ROT", Vector2(zone.position.x + half.x * 0.5, mid.y + half.y * 0.5)],
+		["DROP", Vector2(mid.x + half.x * 0.5, mid.y + half.y * 0.5)],
 	]
 	# Fit the longest label into about half a quadrant so the guides read from arm's length.
-	var max_w := mid.x * 0.55
-	var max_h := mid.y * 0.4
+	var max_w := half.x * 0.55
+	var max_h := half.y * 0.4
 	var size := clampi(int(minf(max_w * 0.55, max_h)), 48, 160)
 	while size > 48:
 		var drop_w := _font.get_string_size("DROP", HORIZONTAL_ALIGNMENT_LEFT, -1, size).x
