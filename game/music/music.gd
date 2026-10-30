@@ -2,7 +2,8 @@ extends Node2D
 
 ## Playlist, mute, and volume for the in-game soundtrack.
 ## Track order is shuffled from the current time, then shuffled again after each full pass.
-## Streams load in the background so skip / first play do not freeze the board.
+## Streams load in the background. On web (Sample playback), each track is also registered
+## as an AudioServer sample before play so decode hitch is not on the gameplay skip path.
 
 const TRACK_PATHS: Array[Dictionary] = [
 	{"title": "Happy on the Way We Fell", "path": "res://game/music/happy_on_the_way_we_fell.mp3"},
@@ -29,18 +30,26 @@ var _font: Font
 var _stream_cache: Dictionary = {}
 ## path currently requested via ResourceLoader
 var _loading: Dictionary = {}
-## When set, play this playlist index as soon as its stream is cached.
+## Web: paths already passed through AudioServer.register_stream_as_sample
+var _samples_registered: Dictionary = {}
+## Web: paths waiting for staggered sample registration (one per frame)
+var _register_queue: Array[String] = []
+var _registering := false
+## When set, play this playlist index as soon as its stream is ready to play.
 var _pending_index := -1
 var _pending_announce := false
 var _load_generation := 0
+var _web_samples := false
 
 
 func _ready() -> void:
 	_font = ThemeDB.fallback_font
+	_web_samples = OS.has_feature("web")
 	_player.finished.connect(_on_finished)
 	add_child(_player)
 	_tracks = TRACK_PATHS.duplicate(true)
 	_shuffle_tracks()
+	_prefetch_all()
 	_request_play(0, true)
 
 
@@ -148,18 +157,34 @@ func _track_title(index: int) -> String:
 	return str(_tracks[index]["title"])
 
 
+func _is_play_ready(path: String) -> bool:
+	if not _stream_cache.has(path):
+		return false
+	if _web_samples and not _samples_registered.has(path):
+		return false
+	return true
+
+
+func _prefetch_all() -> void:
+	for track in _tracks:
+		_ensure_loading(str(track["path"]))
+
+
 func _request_play(index: int, announce: bool) -> void:
 	if index < 0 or index >= _tracks.size():
 		return
 	_pending_index = index
 	_pending_announce = announce
 	var path := _track_path(index)
-	if _stream_cache.has(path):
+	if _is_play_ready(path):
 		_commit_play(index, announce)
 		return
 	if announce:
 		_show("Loading: %s" % _track_title(index))
-	_ensure_loading(path)
+	if _stream_cache.has(path):
+		_enqueue_sample_register(path)
+	else:
+		_ensure_loading(path)
 
 
 func _ensure_loading(path: String) -> void:
@@ -180,14 +205,14 @@ func _load_stream_deferred(path: String, gen: int) -> void:
 	if gen != _load_generation:
 		return
 	if _stream_cache.has(path):
-		_on_stream_ready(path)
+		_on_stream_cached(path)
 		return
 	# Last resort on platforms where threaded load cannot start. Still yield a frame
 	# so the current input / physics step finishes before the hitch.
 	var stream := ResourceLoader.load(path, "AudioStreamMP3", ResourceLoader.CACHE_MODE_REUSE)
 	if stream is AudioStreamMP3:
 		_stream_cache[path] = stream
-		_on_stream_ready(path)
+		_on_stream_cached(path)
 	else:
 		push_warning("Soundtrack failed to load: %s" % path)
 		if _pending_index >= 0 and _track_path(_pending_index) == path:
@@ -211,23 +236,76 @@ func _poll_loads() -> void:
 		var stream := ResourceLoader.load_threaded_get(str(path))
 		if stream is AudioStreamMP3:
 			_stream_cache[str(path)] = stream
-			_on_stream_ready(str(path))
+			_on_stream_cached(str(path))
 		else:
 			push_warning("Soundtrack has unexpected type: %s" % path)
 	for path in finished:
 		_loading.erase(path)
 
 
-func _on_stream_ready(path: String) -> void:
-	if _pending_index >= 0 and _track_path(_pending_index) == path:
-		var index := _pending_index
-		var announce := _pending_announce
-		_commit_play(index, announce)
+func _on_stream_cached(path: String) -> void:
+	if _web_samples and not _samples_registered.has(path):
+		_enqueue_sample_register(path)
+		return
+	_try_commit_pending(path)
+
+
+func _enqueue_sample_register(path: String) -> void:
+	if not _web_samples:
+		_try_commit_pending(path)
+		return
+	if _samples_registered.has(path):
+		_try_commit_pending(path)
+		return
+	if path in _register_queue:
+		return
+	_register_queue.append(path)
+
+
+func _poll_sample_register() -> void:
+	if not _web_samples or _registering or _register_queue.is_empty():
+		return
+	var path: String = str(_register_queue.pop_front())
+	if _samples_registered.has(path):
+		_try_commit_pending(path)
+		return
+	if not _stream_cache.has(path):
+		return
+	_registering = true
+	# Prefer pending track: keep its Loading toast alive across the decode hitch.
+	if _pending_index >= 0 and _track_path(_pending_index) == path and _pending_announce:
+		_show("Loading: %s" % _track_title(_pending_index))
+	var stream: AudioStreamMP3 = _stream_cache[path] as AudioStreamMP3
+	AudioServer.register_stream_as_sample(stream)
+	_samples_registered[path] = true
+	_registering = false
+	_try_commit_pending(path)
+
+
+func _try_commit_pending(path: String) -> void:
+	if _pending_index < 0:
+		return
+	if _track_path(_pending_index) != path:
+		return
+	if not _is_play_ready(path):
+		return
+	var index := _pending_index
+	var announce := _pending_announce
+	_commit_play(index, announce)
 
 
 func _commit_play(index: int, announce: bool) -> void:
 	var path := _track_path(index)
-	if not _stream_cache.has(path):
+	if not _is_play_ready(path):
+		# Keep pending; registration / load will retry commit.
+		_pending_index = index
+		_pending_announce = announce
+		if announce:
+			_show("Loading: %s" % _track_title(index))
+		if _stream_cache.has(path):
+			_enqueue_sample_register(path)
+		else:
+			_ensure_loading(path)
 		return
 	_pending_index = -1
 	_index = index
@@ -243,16 +321,6 @@ func _commit_play(index: int, announce: bool) -> void:
 	_player.play()
 	if announce:
 		_show("Now playing: %s" % _track_title(index))
-	_prefetch_next()
-
-
-func _prefetch_next() -> void:
-	if _tracks.is_empty():
-		return
-	var next := _index + 1
-	if next >= _tracks.size():
-		next = 0
-	_ensure_loading(_track_path(next))
 
 
 func _on_finished() -> void:
@@ -290,6 +358,22 @@ func _show(text: String) -> void:
 
 func _process(delta: float) -> void:
 	_poll_loads()
+	# Prefer registering the pending track ahead of background prefetch work.
+	if _web_samples and _pending_index >= 0:
+		var pending_path := _track_path(_pending_index)
+		if (
+			_stream_cache.has(pending_path)
+			and not _samples_registered.has(pending_path)
+			and pending_path in _register_queue
+			and _register_queue.size() > 1
+			and _register_queue[0] != pending_path
+		):
+			_register_queue.erase(pending_path)
+			_register_queue.push_front(pending_path)
+		if _pending_announce and not _is_play_ready(pending_path):
+			# Keep Loading visible across multi-second sample decode.
+			_show("Loading: %s" % _track_title(_pending_index))
+	_poll_sample_register()
 	if _status_timer <= 0.0:
 		return
 	_status_timer = maxf(0.0, _status_timer - delta)
