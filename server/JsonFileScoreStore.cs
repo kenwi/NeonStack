@@ -102,7 +102,7 @@ public sealed class JsonFileScoreStore
                         submission.PlayerName,
                         submission.FinalScore,
                         rank);
-                    return ScoreAddResult.Failed("Replay is required for top 10 scores.");
+                    return ScoreAddResult.Failed($"Replay is required for top {TopReplayRequiredRank} scores.");
                 }
 
                 var replayJson = submission.Replay.GetRawText();

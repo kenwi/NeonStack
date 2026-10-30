@@ -581,7 +581,7 @@ func _draw_replay_toggle_row(label_size: int) -> void:
 		include_replay
 	)
 	if _requires_top_replay():
-		var notice := "Top 10 scores require a replay"
+		var notice := "Top %d scores require a replay" % HighscoreConfig.TOP_REPLAY_REQUIRED_RANK
 		var notice_size := maxi(11, int(round(13.0 * _ui_scale)))
 		var row_center_x := (
 			_replay_toggle_rect.get_center().x
@@ -952,7 +952,7 @@ func _submit_score() -> void:
 	if require_replay:
 		var replay_json := _pending_replay_json()
 		if replay_json.is_empty():
-			status_text = "Replay required for top 10"
+			status_text = "Replay required for top %d" % HighscoreConfig.TOP_REPLAY_REQUIRED_RANK
 			phase = Phase.NAME_ENTRY
 			submitted_this_run = false
 			_submit_lock = false
