@@ -84,8 +84,8 @@ func _ready() -> void:
 	player_name = _load_player_name()
 
 
-func set_ui_scale(scale: float) -> void:
-	_ui_scale = maxf(0.5, scale)
+func set_ui_scale(ui_scale: float) -> void:
+	_ui_scale = maxf(0.5, ui_scale)
 
 
 func reset_run() -> void:
@@ -424,7 +424,7 @@ func _draw_name_panel(vp: Vector2) -> void:
 		var caret := Rect2(
 			caret_x + 2.0 * ui_scale,
 			field.get_center().y - caret_h * 0.5,
-			maxi(3.0, 3.0 * ui_scale),
+			maxf(3.0, 3.0 * ui_scale),
 			caret_h
 		)
 		draw_rect(caret, Color("8ef7ff"), true, -1.0, true)
@@ -584,7 +584,7 @@ func _draw_centered(font: Font, center: Vector2, text: String, size: int, color:
 
 func _format_time(seconds: float) -> String:
 	var total := int(floor(seconds))
-	var m := total / 60
+	var m := int(total / 60.0)
 	var s := total % 60
 	return "%d:%02d" % [m, s]
 
@@ -838,10 +838,32 @@ func _layout_name_targets(vp: Vector2) -> Rect2:
 	_skip_rect = Rect2()
 	_replay_toggle_rect = Rect2()
 	_name_field_rect = Rect2()
+	var panel := Rect2()
+	var gap := 0.0
+	var button_h := 0.0
+	var button_w := 0.0
+	var button_y := 0.0
+	var toggle_w := 0.0
+	var toggle_h := 0.0
+	var label_w := 0.0
+	var row_w := 0.0
+	var row_x := 0.0
+	var label_size := maxi(14, int(round(18.0 * ui_scale)))
+	if _body_font != null:
+		label_w = _body_font.get_string_size(
+			"Send replay", HORIZONTAL_ALIGNMENT_LEFT, -1, label_size
+		).x
+	else:
+		label_w = 110.0
 	if not touch_ui:
-		var desktop_w := mini(420.0 * ui_scale, vp.x - 40.0)
+		var desktop_w := minf(420.0 * ui_scale, vp.x - 40.0)
 		var desktop_h := 340.0 * ui_scale
-		var panel := Rect2((vp.x - desktop_w) * 0.5, (vp.y - desktop_h) * 0.5 + 36.0 * ui_scale, desktop_w, desktop_h)
+		panel = Rect2(
+			(vp.x - desktop_w) * 0.5,
+			(vp.y - desktop_h) * 0.5 + 36.0 * ui_scale,
+			desktop_w,
+			desktop_h
+		)
 		var field_h := 44.0 * ui_scale
 		_name_field_rect = Rect2(
 			panel.position.x + 20.0 * ui_scale,
@@ -849,38 +871,36 @@ func _layout_name_targets(vp: Vector2) -> Rect2:
 			panel.size.x - 40.0 * ui_scale,
 			field_h
 		)
-		var toggle_w := maxf(72.0, 70.0 * ui_scale)
-		var toggle_h := 36.0 * ui_scale
-		var label_w := _body_font.get_string_size("Send replay", HORIZONTAL_ALIGNMENT_LEFT, -1, maxi(14, int(round(18 * ui_scale)))).x if _body_font != null else 110.0
-		var row_w := label_w + 10.0 * ui_scale + toggle_w
-		var row_x := panel.get_center().x - row_w * 0.5
+		toggle_w = maxf(72.0, 70.0 * ui_scale)
+		toggle_h = 36.0 * ui_scale
+		row_w = label_w + 10.0 * ui_scale + toggle_w
+		row_x = panel.get_center().x - row_w * 0.5
 		_replay_toggle_rect = Rect2(
 			row_x + label_w + 10.0 * ui_scale,
 			_name_field_rect.end.y + 14.0 * ui_scale,
 			toggle_w,
 			toggle_h
 		)
-		var gap := 8.0 * ui_scale
-		var button_h := 40.0 * ui_scale
-		var button_w := (panel.size.x - 40.0 * ui_scale - gap) * 0.5
-		var button_y := panel.end.y - button_h - 16.0 * ui_scale
+		gap = 8.0 * ui_scale
+		button_h = 40.0 * ui_scale
+		button_w = (panel.size.x - 40.0 * ui_scale - gap) * 0.5
+		button_y = panel.end.y - button_h - 16.0 * ui_scale
 		_skip_rect = Rect2(panel.position.x + 20.0 * ui_scale, button_y, button_w, button_h)
 		_submit_rect = Rect2(_skip_rect.end.x + gap, button_y, button_w, button_h)
 		return panel
-	var panel_w := mini(maxf(420.0 * ui_scale, 300.0), vp.x - 16.0)
+	var panel_w := minf(maxf(420.0 * ui_scale, 300.0), vp.x - 16.0)
 	var panel_h := minf(maxf(300.0, 260.0 * ui_scale), vp.y - 16.0)
-	var panel := Rect2((vp.x - panel_w) * 0.5, maxf(8.0, (vp.y - panel_h) * 0.35), panel_w, panel_h)
-	var gap := 8.0
-	var button_h := 44.0
-	var button_w := (panel.size.x - 24.0 - gap) * 0.5
-	var button_y := panel.end.y - button_h - 12.0
+	panel = Rect2((vp.x - panel_w) * 0.5, maxf(8.0, (vp.y - panel_h) * 0.35), panel_w, panel_h)
+	gap = 8.0
+	button_h = 44.0
+	button_w = (panel.size.x - 24.0 - gap) * 0.5
+	button_y = panel.end.y - button_h - 12.0
 	_skip_rect = Rect2(panel.position.x + 12.0, button_y, button_w, button_h)
 	_submit_rect = Rect2(_skip_rect.end.x + gap, button_y, button_w, button_h)
 	_name_field_rect = Rect2(panel.position.x + 20.0, button_y - 112.0, panel.size.x - 40.0, 44.0)
-	var toggle_w := 72.0
-	var label_w := _body_font.get_string_size("Send replay", HORIZONTAL_ALIGNMENT_LEFT, -1, maxi(14, int(round(18 * ui_scale)))).x if _body_font != null else 110.0
-	var row_w := label_w + 10.0 + toggle_w
-	var row_x := panel.get_center().x - row_w * 0.5
+	toggle_w = 72.0
+	row_w = label_w + 10.0 + toggle_w
+	row_x = panel.get_center().x - row_w * 0.5
 	_replay_toggle_rect = Rect2(
 		row_x + label_w + 10.0,
 		_name_field_rect.end.y + 10.0,
@@ -911,14 +931,14 @@ func _draw_name_field_chrome(field: Rect2, active: bool) -> void:
 func _layout_leaderboard(vp: Vector2) -> Rect2:
 	var ui_scale := _ui_scale
 	var touch_ui := PlayDevice.is_touch_primary()
-	var panel_w := mini(480.0 * ui_scale, vp.x - 32.0)
+	var panel_w := minf(480.0 * ui_scale, vp.x - 32.0)
 	if touch_ui:
-		panel_w = mini(maxf(480.0 * ui_scale, 300.0), vp.x - 16.0)
+		panel_w = minf(maxf(480.0 * ui_scale, 300.0), vp.x - 16.0)
 	var row_h := 28.0 * ui_scale
 	var rows := maxi(1, entries.size())
 	var tab_h := maxf(36.0, 32.0 * ui_scale)
 	var action_h := 56.0 if touch_ui else 0.0
-	var panel_h := mini(100.0 * ui_scale + tab_h + action_h + float(rows) * row_h + 48.0 * ui_scale, vp.y - 16.0)
+	var panel_h := minf(100.0 * ui_scale + tab_h + action_h + float(rows) * row_h + 48.0 * ui_scale, vp.y - 16.0)
 	var panel_y := (vp.y - panel_h) * 0.5
 	if touch_ui:
 		panel_y = maxf(8.0, panel_y)
@@ -1020,10 +1040,10 @@ func _load_player_name() -> String:
 	return HighscoreChecksum.sanitize_player_name(str(value))
 
 
-func _save_player_name(name: String) -> void:
+func _save_player_name(saved_name: String) -> void:
 	var cfg := ConfigFile.new()
 	cfg.load(HighscoreConfig.PLAYER_NAME_PATH)
-	cfg.set_value(HighscoreConfig.PLAYER_NAME_SECTION, HighscoreConfig.PLAYER_NAME_KEY, name)
+	cfg.set_value(HighscoreConfig.PLAYER_NAME_SECTION, HighscoreConfig.PLAYER_NAME_KEY, saved_name)
 	cfg.save(HighscoreConfig.PLAYER_NAME_PATH)
 
 

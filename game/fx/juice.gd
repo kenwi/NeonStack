@@ -214,7 +214,7 @@ func note_score(score: int, board_center: Vector2) -> void:
 
 func _format_milestone(score: int) -> String:
 	if score >= 1000 and score % 1000 == 0:
-		return "%dK!" % int(score / 1000)
+		return "%dK!" % int(score / 1000.0)
 	return "%d!" % score
 
 
