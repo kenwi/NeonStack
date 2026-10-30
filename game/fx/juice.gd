@@ -9,6 +9,8 @@ const CLEAR_NAMES := ["", "SINGLE", "DOUBLE", "TRIPLE", "TETRIS"]
 const SCORE_MILESTONES := [1000, 5000, 10000, 25000, 50000, 75000, 100000]
 
 var enabled := true
+## When true, FX hooks no-op without changing the user toggle (used for replay seek).
+var _silent := false
 var _font: Font
 var _trail: Array = []
 var _impacts: Array = []
@@ -53,6 +55,19 @@ func set_enabled(value: bool) -> void:
 	queue_redraw()
 
 
+func begin_silent() -> void:
+	_silent = true
+	_clear_fx()
+
+
+func end_silent() -> void:
+	_silent = false
+
+
+func _fx_on() -> bool:
+	return enabled and not _silent
+
+
 func reset_run() -> void:
 	_combo = 0
 	_milestone_index = 0
@@ -60,7 +75,7 @@ func reset_run() -> void:
 
 
 func hard_drop(cells_from: Array, cells_to: Array, color: Color, board_origin: Vector2, cell_size: float) -> void:
-	if not enabled or cells_from.is_empty() or cells_to.is_empty():
+	if not _fx_on() or cells_from.is_empty() or cells_to.is_empty():
 		return
 	var start_y := 0
 	var end_y := 0
@@ -86,7 +101,7 @@ func hard_drop(cells_from: Array, cells_to: Array, color: Color, board_origin: V
 
 
 func lock_impact(cells: Array, color: Color, board_origin: Vector2, cell_size: float) -> void:
-	if not enabled or cells.is_empty():
+	if not _fx_on() or cells.is_empty():
 		return
 	_impacts.append({
 		"cells": cells.duplicate(),
@@ -100,7 +115,7 @@ func lock_impact(cells: Array, color: Color, board_origin: Vector2, cell_size: f
 
 
 func line_clear_begin(rows: Array, board: Array, colors: Dictionary, board_origin: Vector2, cell_size: float) -> void:
-	if not enabled or rows.is_empty():
+	if not _fx_on() or rows.is_empty():
 		return
 	for y in rows:
 		for x in 10:
@@ -123,7 +138,7 @@ func line_clear_begin(rows: Array, board: Array, colors: Dictionary, board_origi
 
 
 func line_clear_scored(cleared: int, points: int, board_center: Vector2) -> void:
-	if not enabled or cleared <= 0:
+	if not _fx_on() or cleared <= 0:
 		return
 	_combo += 1
 	var label: String = CLEAR_NAMES[cleared] if cleared < CLEAR_NAMES.size() else "%d LINES" % cleared
@@ -173,7 +188,7 @@ func note_no_clear() -> void:
 
 
 func level_up(level: int, board_center: Vector2) -> void:
-	if not enabled:
+	if not _fx_on():
 		return
 	_level_flash_level = level
 	_level_flash_timer = 1.1
@@ -190,7 +205,7 @@ func level_up(level: int, board_center: Vector2) -> void:
 
 
 func note_score(score: int, board_center: Vector2) -> void:
-	if not enabled or score <= 0:
+	if not _fx_on() or score <= 0:
 		return
 	var fired := false
 	while _milestone_index < SCORE_MILESTONES.size() and score >= int(SCORE_MILESTONES[_milestone_index]):
@@ -219,7 +234,7 @@ func _format_milestone(score: int) -> String:
 
 
 func active_pulse_scale(grounded: bool, lock_timer: float, lock_limit: float = 0.5) -> float:
-	if not enabled or not grounded or lock_limit <= 0.0:
+	if not _fx_on() or not grounded or lock_limit <= 0.0:
 		return 1.0
 	var t := clampf(lock_timer / lock_limit, 0.0, 1.0)
 	# Quicker pulse as lock nears commit.
@@ -228,7 +243,7 @@ func active_pulse_scale(grounded: bool, lock_timer: float, lock_limit: float = 0
 
 
 func tick(delta: float) -> void:
-	if not enabled:
+	if not _fx_on():
 		return
 	_tick_list(_trail, delta)
 	_tick_list(_impacts, delta)
@@ -268,7 +283,7 @@ func tick(delta: float) -> void:
 
 
 func draw_fx(host: CanvasItem) -> void:
-	if not enabled or _font == null:
+	if not _fx_on() or _font == null:
 		return
 	if _level_flash_timer > 0.0:
 		var life := clampf(_level_flash_timer / 1.1, 0.0, 1.0)
