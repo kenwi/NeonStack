@@ -10,4 +10,6 @@ public sealed class HighscoreEntry
     public int Level { get; set; }
     public float ElapsedSeconds { get; set; }
     public DateTimeOffset SubmittedAt { get; set; }
+    public string Checksum { get; set; } = string.Empty;
+    public bool HasReplay { get; set; }
 }

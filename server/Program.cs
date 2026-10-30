@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.Primitives;
 using Tetris.Highscores.Server;
@@ -186,6 +187,94 @@ app.MapGet("/api/scores/{modeId}", async (
         clientIp,
         entries.Count);
     return Results.Ok(entries);
+});
+
+app.MapPost("/api/replays", async (
+    ReplaySubmission submission,
+    JsonFileScoreStore store,
+    HttpContext httpContext,
+    ILogger<Program> logger,
+    CancellationToken cancellationToken) =>
+{
+    var clientIp = httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+    var origin = httpContext.Request.Headers.Origin.ToString();
+    var checksum = (submission.Checksum ?? string.Empty).Trim();
+    var modeId = ScoreSanitizer.SanitizeModeId(submission.ModeId ?? string.Empty);
+
+    logger.LogInformation(
+        "POST /api/replays request: ClientIp={ClientIp}, Origin={Origin}, Checksum={Checksum}, ModeId={ModeId}",
+        clientIp,
+        string.IsNullOrEmpty(origin) ? "(none)" : origin,
+        checksum,
+        modeId);
+
+    if (string.IsNullOrEmpty(checksum))
+        return Results.BadRequest(new { error = "Checksum is required." });
+    if (string.IsNullOrEmpty(modeId))
+        return Results.BadRequest(new { error = "ModeId is required." });
+    if (submission.Replay.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
+        return Results.BadRequest(new { error = "Replay body is required." });
+
+    string replayJson;
+    try
+    {
+        replayJson = submission.Replay.GetRawText();
+    }
+    catch (Exception)
+    {
+        return Results.BadRequest(new { error = "Replay JSON is invalid." });
+    }
+
+    var (ok, error) = await store.TryAttachReplayAsync(checksum, modeId, replayJson, cancellationToken);
+    if (!ok)
+    {
+        logger.LogWarning(
+            "POST /api/replays rejected: ClientIp={ClientIp}, Checksum={Checksum}, ModeId={ModeId}, Error={Error}",
+            clientIp,
+            checksum,
+            modeId,
+            error);
+        var conflict = error.Contains("No score found", StringComparison.OrdinalIgnoreCase)
+            || error.Contains("does not match", StringComparison.OrdinalIgnoreCase);
+        return conflict
+            ? Results.Conflict(new { error })
+            : Results.BadRequest(new { error });
+    }
+
+    logger.LogInformation(
+        "POST /api/replays succeeded: ClientIp={ClientIp}, Checksum={Checksum}, ModeId={ModeId}",
+        clientIp,
+        checksum,
+        modeId);
+    return Results.Ok(new { message = "Replay accepted.", checksum });
+});
+
+app.MapGet("/api/replays/{checksum}", async (
+    string checksum,
+    JsonFileScoreStore store,
+    HttpContext httpContext,
+    ILogger<Program> logger,
+    CancellationToken cancellationToken) =>
+{
+    var clientIp = httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+    var safeChecksum = (checksum ?? string.Empty).Trim();
+
+    logger.LogInformation(
+        "GET /api/replays request: ClientIp={ClientIp}, Checksum={Checksum}",
+        clientIp,
+        safeChecksum);
+
+    var replayJson = await store.GetReplayJsonAsync(safeChecksum, cancellationToken);
+    if (replayJson == null)
+    {
+        logger.LogWarning(
+            "GET /api/replays not found: ClientIp={ClientIp}, Checksum={Checksum}",
+            clientIp,
+            safeChecksum);
+        return Results.NotFound(new { error = "Replay not found." });
+    }
+
+    return Results.Content(replayJson, "application/json");
 });
 
 app.Run();

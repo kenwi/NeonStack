@@ -12,20 +12,30 @@ public sealed record ScoreAddResult(bool Accepted, int Rank, int TotalEntriesFor
 
 public sealed class JsonFileScoreStore
 {
+    public const int MaxReplayBytes = 1_048_576;
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true
     };
 
     private readonly string _filePath;
+    private readonly string _replayDir;
     private readonly ILogger<JsonFileScoreStore> _logger;
     private readonly SemaphoreSlim _lock = new(1, 1);
 
     public JsonFileScoreStore(IConfiguration configuration, ILogger<JsonFileScoreStore> logger)
     {
         _filePath = configuration["Highscores:FilePath"] ?? "highscores.json";
+        var configuredReplayDir = configuration["Highscores:ReplayDirectory"];
+        _replayDir = string.IsNullOrWhiteSpace(configuredReplayDir)
+            ? Path.Combine(Path.GetDirectoryName(Path.GetFullPath(_filePath)) ?? ".", "replays")
+            : configuredReplayDir;
         _logger = logger;
-        _logger.LogInformation("JsonFileScoreStore initialized. FilePath={FilePath}", Path.GetFullPath(_filePath));
+        _logger.LogInformation(
+            "JsonFileScoreStore initialized. FilePath={FilePath}, ReplayDir={ReplayDir}",
+            Path.GetFullPath(_filePath),
+            Path.GetFullPath(_replayDir));
     }
 
     public async Task<ScoreAddResult> TryAddScoreAsync(ScoreSubmission submission, CancellationToken cancellationToken = default)
@@ -64,7 +74,8 @@ public sealed class JsonFileScoreStore
                 Level = submission.Level,
                 ElapsedSeconds = submission.ElapsedSeconds,
                 SubmittedAt = submittedAt,
-                Checksum = checksum
+                Checksum = checksum,
+                HasReplay = false
             };
             entries.Add(newEntry);
 
@@ -119,7 +130,9 @@ public sealed class JsonFileScoreStore
                     LinesCleared = entry.LinesCleared,
                     Level = entry.Level,
                     ElapsedSeconds = entry.ElapsedSeconds,
-                    SubmittedAt = entry.SubmittedAt
+                    SubmittedAt = entry.SubmittedAt,
+                    Checksum = entry.Checksum,
+                    HasReplay = entry.HasReplay
                 })
                 .ToArray();
 
@@ -136,6 +149,165 @@ public sealed class JsonFileScoreStore
         finally
         {
             _lock.Release();
+        }
+    }
+
+    public async Task<(bool Ok, string Error)> TryAttachReplayAsync(
+        string checksum,
+        string modeId,
+        string replayJson,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(checksum))
+            return (false, "Checksum is required.");
+        if (string.IsNullOrWhiteSpace(modeId))
+            return (false, "ModeId is required.");
+        if (string.IsNullOrWhiteSpace(replayJson))
+            return (false, "Replay body is required.");
+
+        var byteCount = System.Text.Encoding.UTF8.GetByteCount(replayJson);
+        if (byteCount > MaxReplayBytes)
+            return (false, "Replay exceeds size limit.");
+
+        if (!TryValidateReplaySchema(replayJson, out var schemaError))
+            return (false, schemaError);
+
+        await _lock.WaitAsync(cancellationToken);
+        try
+        {
+            var data = await ReadAsync(cancellationToken);
+            if (!data.Modes.TryGetValue(modeId, out var modeEntries))
+                return (false, "No score found for checksum.");
+
+            var match = modeEntries.FirstOrDefault(e =>
+                !string.IsNullOrEmpty(e.Checksum) &&
+                string.Equals(e.Checksum, checksum, StringComparison.OrdinalIgnoreCase));
+            if (match == null)
+                return (false, "No score found for checksum.");
+
+            if (!TryMatchReplayOutcome(replayJson, match, out var outcomeError))
+                return (false, outcomeError);
+
+            Directory.CreateDirectory(_replayDir);
+            var path = ReplayPath(checksum);
+            await File.WriteAllTextAsync(path, replayJson, cancellationToken);
+            match.HasReplay = true;
+            await WriteAsync(data, cancellationToken);
+
+            _logger.LogInformation(
+                "Replay attached: Checksum={Checksum}, ModeId={ModeId}, Bytes={Bytes}, Path={Path}",
+                checksum,
+                modeId,
+                byteCount,
+                path);
+            return (true, string.Empty);
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    public async Task<string?> GetReplayJsonAsync(string checksum, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(checksum))
+            return null;
+
+        await _lock.WaitAsync(cancellationToken);
+        try
+        {
+            var path = ReplayPath(checksum);
+            if (!File.Exists(path))
+                return null;
+            return await File.ReadAllTextAsync(path, cancellationToken);
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    private string ReplayPath(string checksum)
+    {
+        var safe = new string(checksum.Where(ch => char.IsAsciiLetterOrDigit(ch) || ch is '-' or '_').ToArray());
+        if (string.IsNullOrEmpty(safe))
+            safe = "invalid";
+        return Path.Combine(_replayDir, $"{safe}.json");
+    }
+
+    private static bool TryValidateReplaySchema(string replayJson, out string error)
+    {
+        error = string.Empty;
+        try
+        {
+            using var doc = JsonDocument.Parse(replayJson);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                error = "Replay must be a JSON object.";
+                return false;
+            }
+
+            if (!root.TryGetProperty("v", out var version) || version.GetInt32() != 1)
+            {
+                error = "Unsupported replay version.";
+                return false;
+            }
+
+            if (!root.TryGetProperty("seed", out _))
+            {
+                error = "Replay seed is required.";
+                return false;
+            }
+
+            if (!root.TryGetProperty("tickHz", out var tickHz) || tickHz.GetInt32() != 60)
+            {
+                error = "Replay tickHz must be 60.";
+                return false;
+            }
+
+            if (!root.TryGetProperty("events", out var events) || events.ValueKind != JsonValueKind.Array)
+            {
+                error = "Replay events array is required.";
+                return false;
+            }
+
+            return true;
+        }
+        catch (JsonException)
+        {
+            error = "Replay JSON is invalid.";
+            return false;
+        }
+    }
+
+    private static bool TryMatchReplayOutcome(string replayJson, StoredScoreEntry entry, out string error)
+    {
+        error = string.Empty;
+        try
+        {
+            using var doc = JsonDocument.Parse(replayJson);
+            var root = doc.RootElement;
+            if (root.TryGetProperty("finalScore", out var score) && score.TryGetInt32(out var finalScore) &&
+                finalScore != entry.FinalScore)
+            {
+                error = "Replay finalScore does not match stored score.";
+                return false;
+            }
+
+            if (root.TryGetProperty("linesCleared", out var lines) && lines.TryGetInt32(out var linesCleared) &&
+                linesCleared != entry.LinesCleared)
+            {
+                error = "Replay linesCleared does not match stored score.";
+                return false;
+            }
+
+            return true;
+        }
+        catch (JsonException)
+        {
+            error = "Replay JSON is invalid.";
+            return false;
         }
     }
 
@@ -179,5 +351,6 @@ public sealed class JsonFileScoreStore
         public float ElapsedSeconds { get; set; }
         public DateTimeOffset SubmittedAt { get; set; }
         public string Checksum { get; set; } = string.Empty;
+        public bool HasReplay { get; set; }
     }
 }
