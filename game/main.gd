@@ -1699,6 +1699,38 @@ func _draw_overlay_button(rect: Rect2, label: String) -> void:
 	)
 
 
+func _draw_stack_full_banner(center: Vector2, y_offset: float = 0.0) -> void:
+	var label := "STACK FULL"
+	var font_size := maxi(36, int(round(52.0 * ui_scale)))
+	var text_w := title_font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+	var text_h := title_font.get_ascent(font_size) + title_font.get_descent(font_size)
+	var pad_x := maxf(22.0, 28.0 * ui_scale)
+	var pad_y := maxf(14.0, 18.0 * ui_scale)
+	var box := Rect2(
+		center.x - text_w * 0.5 - pad_x,
+		center.y + y_offset - text_h * 0.5 - pad_y,
+		text_w + pad_x * 2.0,
+		text_h + pad_y * 2.0
+	)
+	draw_rect(box, Color("0b1a28", 0.94), true, -1.0, true)
+	draw_rect(box, Color("fb7185", 0.95), false, maxf(2.5, 3.0 * ui_scale), true)
+	draw_rect(box.grow(4.0 * ui_scale), Color("fb7185", 0.28), false, maxf(1.0, 1.5 * ui_scale), true)
+	var baseline := (
+		box.position.y
+		+ pad_y
+		+ title_font.get_ascent(font_size)
+	)
+	draw_string(
+		title_font,
+		Vector2(center.x - text_w * 0.5, baseline),
+		label,
+		HORIZONTAL_ALIGNMENT_LEFT,
+		-1,
+		font_size,
+		Color("fb7185")
+	)
+
+
 func _sync_touch_overlay_rects() -> void:
 	_touch_close_rect = Rect2()
 	_touch_restart_rect = Rect2()
@@ -1778,18 +1810,11 @@ func _draw_overlays(vp: Vector2) -> void:
 	if game_over and not replay_mode:
 		draw_rect(Rect2(Vector2.ZERO, vp), Color(0, 0, 0, 0.62))
 		var highscore_ui: bool = highscores != null and highscores.is_showing_overlay()
-		_draw_centered_label(
-			center,
-			"STACK FULL",
-			title_font,
-			42,
-			Color("fb7185"),
-			-120.0 if highscore_ui else -36.0
-		)
+		_draw_stack_full_banner(center, -120.0 if highscore_ui else -36.0)
 		if not highscore_ui:
 			if _touch_restart_rect.size.x > 0.0:
 				_draw_overlay_button(_touch_restart_rect, "RESTART")
 			else:
 				_draw_centered_label(center, "R / Space / Enter restart    Esc / Q quit", body_font, 20, Color("e8f7ff"), 18.0)
 	elif game_over and replay_mode:
-		_draw_centered_label(center, "STACK FULL", title_font, 28, Color("fb7185"), 24.0)
+		_draw_stack_full_banner(center, 0.0)

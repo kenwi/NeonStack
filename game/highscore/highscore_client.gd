@@ -499,6 +499,84 @@ func _draw_replay_toggle_row(label_size: int) -> void:
 	)
 
 
+func _leaderboard_columns(panel: Rect2, ui_scale: float) -> Dictionary:
+	var pad := 16.0 * ui_scale
+	var gap := 10.0 * ui_scale
+	var inner_left := panel.position.x + pad
+	var inner_right := panel.end.x - pad
+	var rank_w := 40.0 * ui_scale
+	var score_w := 78.0 * ui_scale
+	var lv_w := 58.0 * ui_scale
+	var lines_w := 118.0 * ui_scale
+	var replay_col_w := 72.0 * ui_scale
+	var replay_btn_w := 64.0 * ui_scale
+	var time_w := 52.0 * ui_scale
+	var time_x := inner_right - time_w
+	var replay_x := time_x - gap - replay_col_w
+	var lines_x := replay_x - gap - lines_w
+	var lv_x := lines_x - gap - lv_w
+	var score_x := lv_x - gap - score_w
+	var name_x := inner_left + rank_w + gap
+	var name_w := maxf(72.0 * ui_scale, score_x - gap - name_x)
+	return {
+		"rank_x": inner_left,
+		"rank_w": rank_w,
+		"name_x": name_x,
+		"name_w": name_w,
+		"score_x": score_x,
+		"score_w": score_w,
+		"lv_x": lv_x,
+		"lv_w": lv_w,
+		"lines_x": lines_x,
+		"lines_w": lines_w,
+		"replay_x": replay_x,
+		"replay_col_w": replay_col_w,
+		"replay_btn_w": replay_btn_w,
+		"time_x": time_x,
+		"time_w": time_w,
+	}
+
+
+func _fit_leaderboard_text(text: String, max_w: float, font_size: int) -> String:
+	if _body_font == null or max_w <= 0.0:
+		return text
+	if _body_font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x <= max_w:
+		return text
+	var trimmed := text
+	while trimmed.length() > 1:
+		trimmed = trimmed.substr(0, trimmed.length() - 1)
+		var candidate := trimmed + "…"
+		if _body_font.get_string_size(candidate, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x <= max_w:
+			return candidate
+	return "…"
+
+
+func _draw_leaderboard_col(
+	text: String,
+	x: float,
+	y: float,
+	col_w: float,
+	font_size: int,
+	color: Color,
+	align_right: bool = false
+) -> void:
+	var draw_text := text
+	var text_w := _body_font.get_string_size(draw_text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+	if text_w > col_w:
+		draw_text = _fit_leaderboard_text(text, col_w, font_size)
+		text_w = _body_font.get_string_size(draw_text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+	var draw_x := x + col_w - text_w if align_right else x
+	draw_string(
+		_body_font,
+		Vector2(draw_x, y),
+		draw_text,
+		HORIZONTAL_ALIGNMENT_LEFT,
+		-1,
+		font_size,
+		color
+	)
+
+
 func _draw_leaderboard_panel(vp: Vector2) -> void:
 	var panel := _layout_leaderboard(vp)
 	var ui_scale := _ui_scale
@@ -507,7 +585,8 @@ func _draw_leaderboard_panel(vp: Vector2) -> void:
 	draw_rect(panel, Color("8ef7ff", 0.55), false, maxf(1.0, 2.0 * ui_scale), true)
 
 	var title_size := maxi(18, int(round(26 * ui_scale)))
-	var body_size := maxi(12, int(round(16 * ui_scale)))
+	var body_size := maxi(12, int(round(15 * ui_scale)))
+	var header_size := maxi(10, int(round(12 * ui_scale)))
 	var hint_size := maxi(11, int(round(13 * ui_scale)))
 	var y := panel.position.y + 28.0 * ui_scale
 	_draw_centered(_title_font, Vector2(panel.get_center().x, y), _board_title(), title_size, Color("8ef7ff"))
@@ -539,12 +618,23 @@ func _draw_leaderboard_panel(vp: Vector2) -> void:
 			Color("6a8799")
 		)
 	else:
+		var cols := _leaderboard_columns(panel, ui_scale)
 		var row_h := 28.0 * ui_scale
-		var left_x := panel.position.x + 18.0 * ui_scale
-		var score_x := panel.position.x + panel.size.x * 0.55
-		var row_right := panel.end.x - 18.0 * ui_scale
-		var replay_w := maxf(58.0, 56.0 * ui_scale)
-		var replay_gap := 8.0 * ui_scale
+		var header_color := Color("6a8799")
+		_draw_leaderboard_col("#", cols.rank_x, y, cols.rank_w, header_size, header_color)
+		_draw_leaderboard_col("NAME", cols.name_x, y, cols.name_w, header_size, header_color)
+		_draw_leaderboard_col("SCORE", cols.score_x, y, cols.score_w, header_size, header_color, true)
+		_draw_leaderboard_col("LEVEL", cols.lv_x, y, cols.lv_w, header_size, header_color, true)
+		_draw_leaderboard_col("LINES CLEARED", cols.lines_x, y, cols.lines_w, header_size, header_color, true)
+		_draw_leaderboard_col("TIME", cols.time_x, y, cols.time_w, header_size, header_color, true)
+		y += 22.0 * ui_scale
+		draw_line(
+			Vector2(panel.position.x + 14.0 * ui_scale, y - 8.0 * ui_scale),
+			Vector2(panel.end.x - 14.0 * ui_scale, y - 8.0 * ui_scale),
+			Color("8ef7ff", 0.25),
+			1.0,
+			true
+		)
 		_play_hit_targets.clear()
 		for entry in entries:
 			if y > row_limit:
@@ -552,40 +642,36 @@ func _draw_leaderboard_panel(vp: Vector2) -> void:
 			var rank: int = int(entry.get("rank", 0))
 			var pname: String = str(entry.get("playerName", "?"))
 			var score: int = int(entry.get("finalScore", 0))
+			var level: int = int(entry.get("level", 1))
+			var lines: int = int(entry.get("linesCleared", 0))
 			var elapsed: float = float(entry.get("elapsedSeconds", 0.0))
 			var has_replay: bool = bool(entry.get("hasReplay", false))
 			var checksum: String = str(entry.get("checksum", ""))
-			var line := "#%d  %s" % [rank, pname]
-			draw_string(_body_font, Vector2(left_x, y), line, HORIZONTAL_ALIGNMENT_LEFT, -1, body_size, Color("e8f7ff"))
-			draw_string(
-				_body_font,
-				Vector2(score_x, y),
-				str(score),
-				HORIZONTAL_ALIGNMENT_LEFT,
-				-1,
+			_draw_leaderboard_col("#%d" % rank, cols.rank_x, y, cols.rank_w, body_size, Color("e8f7ff"))
+			_draw_leaderboard_col(pname, cols.name_x, y, cols.name_w, body_size, Color("e8f7ff"))
+			_draw_leaderboard_col(str(score), cols.score_x, y, cols.score_w, body_size, Color("8ef7ff"), true)
+			_draw_leaderboard_col(str(level), cols.lv_x, y, cols.lv_w, body_size, Color("6a8799"), true)
+			_draw_leaderboard_col(str(lines), cols.lines_x, y, cols.lines_w, body_size, Color("6a8799"), true)
+			_draw_leaderboard_col(
+				_format_time(elapsed),
+				cols.time_x,
+				y,
+				cols.time_w,
 				body_size,
-				Color("8ef7ff")
-			)
-			var time_str := _format_time(elapsed)
-			var time_w := _body_font.get_string_size(time_str, HORIZONTAL_ALIGNMENT_LEFT, -1, body_size).x
-			var time_x := row_right - time_w
-			draw_string(
-				_body_font,
-				Vector2(time_x, y),
-				time_str,
-				HORIZONTAL_ALIGNMENT_LEFT,
-				-1,
-				body_size,
-				Color("6a8799")
+				Color("6a8799"),
+				true
 			)
 			if has_replay and not checksum.is_empty():
 				var play_h := maxf(20.0, row_h - 6.0)
-				var play_rect := Rect2(
-					time_x - replay_gap - replay_w,
-					y - play_h * 0.72,
-					replay_w,
-					play_h
+				# Center in the open span between LINES CLEARED and TIME content.
+				var span_left: float = float(cols.lines_x) + float(cols.lines_w)
+				var span_right: float = float(cols.time_x)
+				var play_x: float = (
+					(span_left + span_right) * 0.5
+					- float(cols.replay_btn_w) * 0.5
+					+ 14.0 * ui_scale
 				)
+				var play_rect := Rect2(play_x, y - play_h * 0.72, float(cols.replay_btn_w), play_h)
 				_draw_choice(play_rect, "REPLAY", true, 11)
 				_play_hit_targets.append({"rect": play_rect, "checksum": checksum})
 			y += row_h
@@ -978,14 +1064,18 @@ func _draw_name_field_chrome(field: Rect2, active: bool) -> void:
 func _layout_leaderboard(vp: Vector2) -> Rect2:
 	var ui_scale := _ui_scale
 	var touch_ui := PlayDevice.is_touch_primary()
-	var panel_w := minf(480.0 * ui_scale, vp.x - 32.0)
+	var panel_w := minf(760.0 * ui_scale, vp.x - 24.0)
 	if touch_ui:
-		panel_w = minf(maxf(480.0 * ui_scale, 300.0), vp.x - 16.0)
+		panel_w = minf(maxf(640.0 * ui_scale, 320.0), vp.x - 12.0)
 	var row_h := 28.0 * ui_scale
+	var header_h := 22.0 * ui_scale
 	var rows := maxi(1, entries.size())
 	var tab_h := maxf(36.0, 32.0 * ui_scale)
 	var action_h := 56.0 if touch_ui else 0.0
-	var panel_h := minf(100.0 * ui_scale + tab_h + action_h + float(rows) * row_h + 48.0 * ui_scale, vp.y - 16.0)
+	var panel_h := minf(
+		100.0 * ui_scale + tab_h + action_h + header_h + float(rows) * row_h + 48.0 * ui_scale,
+		vp.y - 16.0
+	)
 	var panel_y := (vp.y - panel_h) * 0.5
 	if touch_ui:
 		panel_y = maxf(8.0, panel_y)
