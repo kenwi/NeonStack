@@ -467,7 +467,13 @@ func _draw_name_panel(vp: Vector2) -> void:
 	var y := panel.position.y + 36.0 * ui_scale
 	_draw_centered(_title_font, Vector2(cx, y), "ENTER NAME", title_size, Color("8ef7ff"))
 	y += 42.0 * ui_scale
-	_draw_centered(_body_font, Vector2(cx, y), "Score %d" % pending_score, body_size, Color("e8f7ff"))
+	_draw_centered(
+		_body_font,
+		Vector2(cx, y),
+		"Score %s" % HighscoreConfig.format_score(pending_score),
+		body_size,
+		Color("e8f7ff")
+	)
 	_draw_replay_toggle_row(body_size)
 	if touch_ui and phase == Phase.NAME_ENTRY:
 		_draw_name_field_chrome(_name_field_rect, true)
@@ -551,7 +557,7 @@ func _leaderboard_columns(panel: Rect2, ui_scale: float) -> Dictionary:
 	var inner_left := panel.position.x + pad
 	var inner_right := panel.end.x - pad
 	var rank_w := 40.0 * ui_scale
-	var score_w := 78.0 * ui_scale
+	var score_w := 96.0 * ui_scale
 	var lv_w := 58.0 * ui_scale
 	var lines_w := 118.0 * ui_scale
 	var replay_col_w := 72.0 * ui_scale
@@ -697,18 +703,34 @@ func _draw_leaderboard_panel(vp: Vector2) -> void:
 			var elapsed: float = float(entry.get("elapsedSeconds", 0.0))
 			var has_replay: bool = bool(entry.get("hasReplay", false))
 			var checksum: String = str(entry.get("checksum", ""))
-			_draw_leaderboard_col("#%d" % rank, cols.rank_x, y, cols.rank_w, body_size, Color("e8f7ff"))
-			_draw_leaderboard_col(pname, cols.name_x, y, cols.name_w, body_size, Color("e8f7ff"))
-			_draw_leaderboard_col(str(score), cols.score_x, y, cols.score_w, body_size, Color("8ef7ff"), true)
-			_draw_leaderboard_col(str(level), cols.lv_x, y, cols.lv_w, body_size, Color("6a8799"), true)
-			_draw_leaderboard_col(str(lines), cols.lines_x, y, cols.lines_w, body_size, Color("6a8799"), true)
+			var is_you := (
+				submitted_rank > 0
+				and rank == submitted_rank
+				and view_mode_id == submit_mode_id
+			)
+			var primary := Color("ffd166") if is_you else Color("e8f7ff")
+			var accent := Color("ffd166") if is_you else Color("8ef7ff")
+			var muted := Color("ffd166", 0.78) if is_you else Color("6a8799")
+			_draw_leaderboard_col("#%d" % rank, cols.rank_x, y, cols.rank_w, body_size, primary)
+			_draw_leaderboard_col(pname, cols.name_x, y, cols.name_w, body_size, primary)
+			_draw_leaderboard_col(
+				HighscoreConfig.format_score(score),
+				cols.score_x,
+				y,
+				cols.score_w,
+				body_size,
+				accent,
+				true
+			)
+			_draw_leaderboard_col(str(level), cols.lv_x, y, cols.lv_w, body_size, muted, true)
+			_draw_leaderboard_col(str(lines), cols.lines_x, y, cols.lines_w, body_size, muted, true)
 			_draw_leaderboard_col(
 				_format_time(elapsed),
 				cols.time_x,
 				y,
 				cols.time_w,
 				body_size,
-				Color("6a8799"),
+				muted,
 				true
 			)
 			if has_replay and not checksum.is_empty():

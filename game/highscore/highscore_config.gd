@@ -13,3 +13,17 @@ const PLAYER_NAME_SECTION := "player"
 const PLAYER_NAME_KEY := "name"
 const GREETINGS_SECTION := "greetings"
 const GREETINGS_ENABLED_KEY := "enabled"
+
+
+## Space thousand separators: 10000 -> "10 000".
+static func format_score(value: int) -> String:
+	var sign := "-" if value < 0 else ""
+	var digits := str(absi(value))
+	var out := ""
+	var count := 0
+	for i in range(digits.length() - 1, -1, -1):
+		if count > 0 and count % 3 == 0:
+			out = " " + out
+		out = digits.substr(i, 1) + out
+		count += 1
+	return sign + out

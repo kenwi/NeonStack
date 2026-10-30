@@ -1625,7 +1625,7 @@ func _draw_side_panels() -> void:
 	_draw_panel(stats, "STATS", label_size)
 	# Label left / value right-aligned so large scores grow inward, not past the border.
 	var stat_rows := [
-		["SCORE", str(score)],
+		["SCORE", HighscoreConfig.format_score(score)],
 		["LINES", str(lines_cleared)],
 		["LEVEL", str(level)],
 	]
