@@ -5,6 +5,7 @@ extends Node2D
 const PlayDevice = preload("res://game/platform/play_device.gd")
 const ReplayActions = preload("res://game/replay/actions.gd")
 const ReplayFormat = preload("res://game/replay/replay_format.gd")
+const HighscoreConfig = preload("res://game/highscore/highscore_config.gd")
 
 const COLS := 10
 const ROWS := 20
@@ -47,6 +48,7 @@ const HELP_KEYS := [
 	["L", "Highscores"],
 	["F / F11", "Fullscreen"],
 	["J", "Toggle juice FX"],
+	["G", "Toggle rank greetings"],
 	["Q", "Quit"],
 	["H", "Toggle this help"],
 	["S", "Score table"],
@@ -172,6 +174,9 @@ var replay_status := ""
 var replay_speed := 1.0
 var replay_total_seconds := 0.0
 const REPLAY_SPEEDS: Array[float] = [0.5, 1.0, 2.0, 4.0, 8.0]
+## Best leaderboard place greeted this run (11 = not yet in top 10).
+var _rank_announced := 11
+var leaderboard_greetings := true
 
 var board_origin := Vector2.ZERO
 var cell_size := REF_CELL
@@ -241,6 +246,7 @@ func _set_game_over() -> void:
 func _ready() -> void:
 	title_font = ThemeDB.fallback_font
 	body_font = ThemeDB.fallback_font
+	_load_leaderboard_greetings()
 	if replay_player != null:
 		replay_player.finished.connect(_on_replay_finished)
 	_layout()
@@ -364,6 +370,7 @@ func _new_game(seed_override: int = -1) -> void:
 	held_soft = false
 	sim_tick = 0
 	tick_accum = 0.0
+	_rank_announced = 11
 	if seed_override >= 0:
 		run_seed = seed_override
 	else:
@@ -371,6 +378,7 @@ func _new_game(seed_override: int = -1) -> void:
 	bag_rng.seed = run_seed
 	if highscores != null and not replay_mode:
 		highscores.reset_run()
+		highscores.refresh_live_ranks()
 	if juice != null:
 		juice.reset_run()
 	if replay_recorder != null:
@@ -493,6 +501,7 @@ func _hard_drop() -> void:
 		var col: Color = COLORS[piece_id]
 		juice.hard_drop(from_cells, _cells(piece_id, piece_rot, piece_pos), col, board_origin, cell_size)
 		juice.note_score(score, _board_center())
+	_check_leaderboard_greetings()
 	_lock_piece()
 
 
@@ -561,6 +570,7 @@ func _finish_line_clear() -> void:
 		juice.note_score(score, _board_center())
 		if level > previous_level:
 			juice.level_up(level, _board_center())
+	_check_leaderboard_greetings()
 	_spawn_next()
 	queue_redraw()
 
@@ -570,6 +580,57 @@ func toggle_juice() -> void:
 		return
 	juice.toggle()
 	queue_redraw()
+
+
+func _check_leaderboard_greetings() -> void:
+	if not leaderboard_greetings or replay_mode or highscores == null or juice == null or game_over:
+		return
+	var rank: int = highscores.rank_for_score(score)
+	if rank <= 0 or rank >= _rank_announced:
+		return
+	for place in range(_rank_announced - 1, rank - 1, -1):
+		if place >= 1 and place <= 10:
+			juice.announce_rank(place, _board_center())
+	if rank == 1:
+		juice.announce_new_record(_board_center())
+	_rank_announced = rank
+
+
+func _debug_leaderboard_greeting(kind: int) -> void:
+	if juice == null:
+		return
+	if kind == 1:
+		juice.announce_rank(10, _board_center())
+	elif kind == 2:
+		juice.announce_new_record(_board_center())
+
+
+func _toggle_leaderboard_greetings() -> void:
+	leaderboard_greetings = not leaderboard_greetings
+	_save_leaderboard_greetings()
+	if music != null and music.has_method("show_status"):
+		music.show_status("Greetings on" if leaderboard_greetings else "Greetings off")
+
+
+func _load_leaderboard_greetings() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(HighscoreConfig.PLAYER_NAME_PATH) != OK:
+		leaderboard_greetings = true
+		return
+	leaderboard_greetings = bool(
+		cfg.get_value(HighscoreConfig.GREETINGS_SECTION, HighscoreConfig.GREETINGS_ENABLED_KEY, true)
+	)
+
+
+func _save_leaderboard_greetings() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(HighscoreConfig.PLAYER_NAME_PATH)
+	cfg.set_value(
+		HighscoreConfig.GREETINGS_SECTION,
+		HighscoreConfig.GREETINGS_ENABLED_KEY,
+		leaderboard_greetings
+	)
+	cfg.save(HighscoreConfig.PLAYER_NAME_PATH)
 
 
 func _hold() -> void:
@@ -647,6 +708,7 @@ func _sim_tick() -> void:
 				score += 1
 				if juice != null:
 					juice.note_score(score, _board_center())
+				_check_leaderboard_greetings()
 			soft_timer = 0.035
 	else:
 		soft_timer = 0.0
@@ -1079,6 +1141,18 @@ func _input(event: InputEvent) -> void:
 		return
 	if _key_pressed(event, KEY_J):
 		toggle_juice()
+		get_viewport().set_input_as_handled()
+		return
+	if _key_pressed(event, KEY_G):
+		_toggle_leaderboard_greetings()
+		get_viewport().set_input_as_handled()
+		return
+	if _key_pressed(event, KEY_1) or _key_pressed(event, KEY_KP_1):
+		_debug_leaderboard_greeting(1)
+		get_viewport().set_input_as_handled()
+		return
+	if _key_pressed(event, KEY_2) or _key_pressed(event, KEY_KP_2):
+		_debug_leaderboard_greeting(2)
 		get_viewport().set_input_as_handled()
 		return
 	if _key_pressed(event, KEY_Q):

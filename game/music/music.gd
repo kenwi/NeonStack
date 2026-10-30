@@ -350,6 +350,10 @@ func _toast_bottom_inset() -> float:
 	return 18.0
 
 
+func show_status(text: String) -> void:
+	_show(text)
+
+
 func _show(text: String) -> void:
 	_status = text
 	_status_timer = STATUS_TIME

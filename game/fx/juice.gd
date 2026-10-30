@@ -5,8 +5,12 @@ extends Node2D
 
 const CONFIG_PATH := "user://juice.cfg"
 const CLEAR_NAMES := ["", "SINGLE", "DOUBLE", "TRIPLE", "TETRIS"]
-## Tuned from live boards: casual breaks early, elite classic runs sit near 75k-100k.
-const SCORE_MILESTONES := [1000, 5000, 10000, 25000, 50000, 75000, 100000]
+## Tuned from live boards: casual breaks early; 100k+ runs keep getting callouts.
+const SCORE_MILESTONES := [
+	1000, 5000, 10000, 25000, 50000, 75000, 100000,
+	125000, 150000, 175000, 200000, 250000, 300000, 400000, 500000,
+	750000, 1000000,
+]
 
 var enabled := true
 ## When true, FX hooks no-op without changing the user toggle (used for replay seek).
@@ -222,6 +226,48 @@ func note_score(score: int, board_center: Vector2) -> void:
 		"color": Color("8ef7ff"),
 		"life": 1.15,
 		"max_life": 1.15,
+		"size": 48,
+	})
+	queue_redraw()
+
+
+func announce_rank(rank: int, board_center: Vector2) -> void:
+	if not _fx_on() or rank < 1 or rank > 10:
+		return
+	_milestone_flash_timer = 1.05
+	var label := "TOP 10!" if rank == 10 else "#%d" % rank
+	var color := Color("ffd166") if rank <= 3 else Color("8ef7ff")
+	_floaters.append({
+		"text": label,
+		"pos": board_center + Vector2(0, -40.0),
+		"vel": Vector2(0, -46.0),
+		"color": color,
+		"life": 1.25,
+		"max_life": 1.25,
+		"size": 52 if rank <= 3 else 46,
+	})
+	if rank <= 3:
+		_banner_text = "TOP %d" % rank
+		_banner_timer = 0.95
+		_banner_color = color
+	queue_redraw()
+
+
+func announce_new_record(board_center: Vector2) -> void:
+	if not _fx_on():
+		return
+	_level_flash_timer = 1.25
+	_level_flash_level = 1
+	_banner_text = "NEW #1"
+	_banner_timer = 1.35
+	_banner_color = Color("ffd166")
+	_floaters.append({
+		"text": "NEW RECORD",
+		"pos": board_center + Vector2(0, 28.0),
+		"vel": Vector2(0, -36.0),
+		"color": Color("ffd166"),
+		"life": 1.4,
+		"max_life": 1.4,
 		"size": 48,
 	})
 	queue_redraw()

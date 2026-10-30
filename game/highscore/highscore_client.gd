@@ -30,6 +30,9 @@ var view_mode_id := ""
 var _submit_gen := 0
 var _leaderboard_gen := 0
 var _replay_gen := 0
+var _live_ranks_gen := 0
+## Descending finalScore values for live in-run top-10 greetings (submit mode).
+var live_top_scores: Array[int] = []
 var _submit_lock := false
 var _name_edit: LineEdit
 var _editing_name := false
@@ -82,6 +85,7 @@ func _ready() -> void:
 	_name_edit.text_submitted.connect(_on_name_submitted)
 	add_child(_name_edit)
 	player_name = _load_player_name()
+	refresh_live_ranks()
 
 
 func set_ui_scale(ui_scale: float) -> void:
@@ -142,6 +146,33 @@ func open_leaderboard() -> void:
 	phase = Phase.LEADERBOARD
 	_fetch_leaderboard()
 	queue_redraw()
+
+
+## Prefetch top scores used to greet mid-run leaderboard climbs.
+func refresh_live_ranks() -> void:
+	_live_ranks_gen += 1
+	var generation := _live_ranks_gen
+	var mode_id: String = HighscoreChecksum.sanitize_mode_id(submit_mode_id)
+	if mode_id.is_empty():
+		return
+	var url := "%s/api/scores/%s?top=%d" % [
+		HighscoreConfig.API_BASE_URL.trim_suffix("/"),
+		mode_id.uri_encode(),
+		HighscoreConfig.LIVE_RANK_TOP_COUNT,
+	]
+	_send("live_ranks", url, PackedStringArray(), HTTPClient.METHOD_GET, "", mode_id, generation)
+
+
+## Hypothetical board rank for a live score (1 = best). 0 = outside the top 10.
+func rank_for_score(score: int) -> int:
+	if score <= 0:
+		return 0
+	for i in live_top_scores.size():
+		if score > live_top_scores[i]:
+			return i + 1
+	if live_top_scores.size() < HighscoreConfig.LIVE_RANK_TOP_COUNT:
+		return live_top_scores.size() + 1
+	return 0
 
 
 func is_capturing_input() -> bool:
@@ -761,6 +792,8 @@ func _on_request_completed(
 		or mode_id != HighscoreChecksum.sanitize_mode_id(view_mode_id)
 	):
 		return
+	if kind == "live_ranks" and generation != _live_ranks_gen:
+		return
 	if kind in ["replay_upload", "replay_fetch"] and generation != _replay_gen:
 		return
 	var text := body.get_string_from_utf8()
@@ -823,6 +856,20 @@ func _on_request_completed(
 			if status_text.is_empty():
 				status_text = "Scores unavailable"
 		queue_redraw()
+		return
+
+	if kind == "live_ranks":
+		live_top_scores.clear()
+		if response_code == 200:
+			var parsed = JSON.parse_string(text)
+			if typeof(parsed) == TYPE_ARRAY:
+				for entry in parsed:
+					if typeof(entry) != TYPE_DICTIONARY:
+						continue
+					live_top_scores.append(int(entry.get("finalScore", 0)))
+					if live_top_scores.size() >= HighscoreConfig.LIVE_RANK_TOP_COUNT:
+						break
+		return
 
 
 func _board_title() -> String:
