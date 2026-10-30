@@ -7,7 +7,7 @@ services:
     restart: unless-stopped
     environment:
       ASPNETCORE_ENVIRONMENT: Production
-      ASPNETCORE_URLS: http://0.0.0.0:5080
+      ASPNETCORE_URLS: http://0.0.0.0:5090
       Highscores__FilePath: /data/highscores.json
       Highscores__ReplayDirectory: /data/replays
       Logging__File__Path: /data/logs/server.log
@@ -18,7 +18,7 @@ services:
     volumes:
       - ./data:/data
     ports:
-      - "${HIGHSCORES_PORT:-5080}:5080"
+      - "${HIGHSCORES_PORT:-5090}:5090"
     networks:
       - highscores
 

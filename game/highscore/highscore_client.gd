@@ -5,6 +5,7 @@ extends Node2D
 const HighscoreConfig = preload("res://game/highscore/highscore_config.gd")
 const HighscoreChecksum = preload("res://game/highscore/highscore_checksum.gd")
 const PlayDevice = preload("res://game/platform/play_device.gd")
+const ReplayFormat = preload("res://game/replay/replay_format.gd")
 
 enum Phase { IDLE, NAME_ENTRY, SUBMITTING, LEADERBOARD }
 
@@ -19,6 +20,8 @@ var pending_score := 0
 var pending_lines := 0
 var pending_level := 1
 var pending_elapsed := 0.0
+var pending_checksum := ""
+var include_replay := true
 var submitted_this_run := false
 var leaderboard_open := false
 var submit_mode_id := ""
@@ -26,6 +29,7 @@ var view_mode_id := ""
 
 var _submit_gen := 0
 var _leaderboard_gen := 0
+var _replay_gen := 0
 var _submit_lock := false
 var _name_edit: LineEdit
 var _editing_name := false
@@ -35,7 +39,9 @@ var _lb_close_rect := Rect2()
 var _lb_restart_rect := Rect2()
 var _submit_rect := Rect2()
 var _skip_rect := Rect2()
+var _replay_toggle_rect := Rect2()
 var _name_field_rect := Rect2()
+var _play_hit_targets: Array = []
 var _title_font: Font
 var _body_font: Font
 var _ui_scale := 1.0
@@ -93,10 +99,14 @@ func reset_run() -> void:
 	pending_lines = 0
 	pending_level = 1
 	pending_elapsed = 0.0
+	pending_checksum = ""
+	include_replay = true
 	view_mode_id = submit_mode_id
 	_submit_gen += 1
 	_leaderboard_gen += 1
+	_replay_gen += 1
 	_submit_lock = false
+	_play_hit_targets.clear()
 	_hide_touch_keyboard()
 	queue_redraw()
 
@@ -106,6 +116,8 @@ func begin_game_over(score: int, lines: int, level: int, elapsed_seconds: float)
 	pending_lines = lines
 	pending_level = level
 	pending_elapsed = maxf(0.001, elapsed_seconds)
+	pending_checksum = ""
+	include_replay = true
 	submitted_rank = -1
 	status_text = ""
 	leaderboard_open = false
@@ -184,6 +196,19 @@ func _is_game_over_context() -> bool:
 
 
 func _handle_name_entry(event: InputEvent) -> bool:
+	if PlayDevice.has_pointer_down(event):
+		_layout_name_targets(get_viewport_rect().size)
+		var point := PlayDevice.pointer_down_position(event)
+		if _replay_toggle_rect.size.x > 0.0 and _replay_toggle_rect.has_point(point):
+			include_replay = not include_replay
+			queue_redraw()
+			return true
+		if _submit_rect.size.x > 0.0 and _submit_rect.has_point(point):
+			_submit_score()
+			return true
+		if _skip_rect.size.x > 0.0 and _skip_rect.has_point(point):
+			_skip_name_entry()
+			return true
 	if PlayDevice.is_touch_primary():
 		return _handle_touch_name_entry(event)
 	if event is InputEventKey and event.pressed and not event.echo:
@@ -241,6 +266,10 @@ func _handle_touch_name_entry(event: InputEvent) -> bool:
 	if PlayDevice.has_pointer_down(event):
 		_layout_name_targets(get_viewport_rect().size)
 		var point := PlayDevice.pointer_down_position(event)
+		if _replay_toggle_rect.size.x > 0.0 and _replay_toggle_rect.has_point(point):
+			include_replay = not include_replay
+			queue_redraw()
+			return true
 		if _submit_rect.has_point(point):
 			_submit_score()
 			return true
@@ -284,6 +313,11 @@ func _handle_leaderboard_pointer(event: InputEvent) -> bool:
 	if _lb_restart_rect.size.x > 0.0 and _lb_restart_rect.has_point(point):
 		get_parent()._new_game()
 		return true
+	for target in _play_hit_targets:
+		var play_rect: Rect2 = target.rect
+		if play_rect.has_point(point):
+			_fetch_and_play_replay(str(target.checksum))
+			return true
 	return false
 
 
@@ -348,6 +382,7 @@ func _draw_name_panel(vp: Vector2) -> void:
 	_draw_centered(_title_font, Vector2(cx, y), "ENTER NAME", title_size, Color("8ef7ff"))
 	y += 42.0 * ui_scale
 	_draw_centered(_body_font, Vector2(cx, y), "Score %d" % pending_score, body_size, Color("e8f7ff"))
+	_draw_replay_toggle_row(body_size)
 	if touch_ui and phase == Phase.NAME_ENTRY:
 		_draw_name_field_chrome(_name_field_rect, true)
 		_draw_choice(_submit_rect, "SUBMIT", true)
@@ -384,11 +419,44 @@ func _draw_name_panel(vp: Vector2) -> void:
 			caret_h
 		)
 		draw_rect(caret, Color("8ef7ff"), true, -1.0, true)
-	y = field.end.y + 28.0 * ui_scale
-	var hint := "Enter submit    Esc skip"
+	if phase == Phase.NAME_ENTRY or phase == Phase.SUBMITTING:
+		_draw_choice(_skip_rect, "SKIP", false)
+		_draw_choice(_submit_rect, "SUBMIT", true)
 	if phase == Phase.SUBMITTING:
-		hint = status_text if not status_text.is_empty() else "Submitting..."
-	_draw_centered(_body_font, Vector2(cx, y), hint, hint_size, Color("6a8799"))
+		var status := status_text if not status_text.is_empty() else "Submitting..."
+		_draw_centered(
+			_body_font,
+			Vector2(cx, _submit_rect.position.y - 14.0 * ui_scale),
+			status,
+			hint_size,
+			Color("6a8799")
+		)
+
+
+func _draw_replay_toggle_row(label_size: int) -> void:
+	if _replay_toggle_rect.size.x <= 0.0:
+		return
+	var label := "Send replay"
+	var label_w := _body_font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, label_size).x
+	var label_x := _replay_toggle_rect.position.x - 10.0 * _ui_scale - label_w
+	var baseline := (
+		_replay_toggle_rect.position.y
+		+ (_replay_toggle_rect.size.y + _body_font.get_ascent(label_size) - _body_font.get_descent(label_size)) * 0.5
+	)
+	draw_string(
+		_body_font,
+		Vector2(label_x, baseline),
+		label,
+		HORIZONTAL_ALIGNMENT_LEFT,
+		-1,
+		label_size,
+		Color("e8f7ff")
+	)
+	_draw_choice(
+		_replay_toggle_rect,
+		"YES" if include_replay else "NO",
+		include_replay
+	)
 
 
 func _draw_leaderboard_panel(vp: Vector2) -> void:
@@ -431,10 +499,13 @@ func _draw_leaderboard_panel(vp: Vector2) -> void:
 			Color("6a8799")
 		)
 	else:
-		var row_h := 26.0 * ui_scale
+		var row_h := 28.0 * ui_scale
 		var left_x := panel.position.x + 18.0 * ui_scale
 		var score_x := panel.position.x + panel.size.x * 0.55
-		var time_x := panel.end.x - 18.0 * ui_scale
+		var row_right := panel.end.x - 18.0 * ui_scale
+		var replay_w := maxf(58.0, 56.0 * ui_scale)
+		var replay_gap := 8.0 * ui_scale
+		_play_hit_targets.clear()
 		for entry in entries:
 			if y > row_limit:
 				break
@@ -442,6 +513,8 @@ func _draw_leaderboard_panel(vp: Vector2) -> void:
 			var pname: String = str(entry.get("playerName", "?"))
 			var score: int = int(entry.get("finalScore", 0))
 			var elapsed: float = float(entry.get("elapsedSeconds", 0.0))
+			var has_replay: bool = bool(entry.get("hasReplay", false))
+			var checksum: String = str(entry.get("checksum", ""))
 			var line := "#%d  %s" % [rank, pname]
 			draw_string(_body_font, Vector2(left_x, y), line, HORIZONTAL_ALIGNMENT_LEFT, -1, body_size, Color("e8f7ff"))
 			draw_string(
@@ -455,15 +528,26 @@ func _draw_leaderboard_panel(vp: Vector2) -> void:
 			)
 			var time_str := _format_time(elapsed)
 			var time_w := _body_font.get_string_size(time_str, HORIZONTAL_ALIGNMENT_LEFT, -1, body_size).x
+			var time_x := row_right - time_w
 			draw_string(
 				_body_font,
-				Vector2(time_x - time_w, y),
+				Vector2(time_x, y),
 				time_str,
 				HORIZONTAL_ALIGNMENT_LEFT,
 				-1,
 				body_size,
 				Color("6a8799")
 			)
+			if has_replay and not checksum.is_empty():
+				var play_h := maxf(20.0, row_h - 6.0)
+				var play_rect := Rect2(
+					time_x - replay_gap - replay_w,
+					y - play_h * 0.72,
+					replay_w,
+					play_h
+				)
+				_draw_choice(play_rect, "REPLAY", true, 11)
+				_play_hit_targets.append({"rect": play_rect, "checksum": checksum})
 			y += row_h
 
 	if touch_ui:
@@ -524,6 +608,7 @@ func _submit_score() -> void:
 		pending_level,
 		pending_elapsed
 	)
+	pending_checksum = checksum
 	var payload := {
 		"modeId": mode_id,
 		"playerName": sanitized_name,
@@ -546,6 +631,68 @@ func _submit_score() -> void:
 		status_text = "Submit failed (offline)"
 		phase = Phase.LEADERBOARD
 		_fetch_leaderboard()
+		queue_redraw()
+
+
+func _maybe_upload_replay_after_score() -> void:
+	if not include_replay:
+		phase = Phase.LEADERBOARD
+		_fetch_leaderboard()
+		return
+	var main := get_parent()
+	if main == null or not main.has_method("get_replay_json"):
+		status_text = "Score saved, replay upload failed"
+		phase = Phase.LEADERBOARD
+		_fetch_leaderboard()
+		return
+	var replay_json: String = main.get_replay_json()
+	if replay_json.is_empty() or not ReplayFormat.fits_size_limit(replay_json):
+		status_text = "Score saved, replay upload failed"
+		phase = Phase.LEADERBOARD
+		_fetch_leaderboard()
+		return
+	var replay_data := ReplayFormat.parse(replay_json)
+	if replay_data.is_empty() or not ReplayFormat.is_valid(replay_data):
+		status_text = "Score saved, replay upload failed"
+		phase = Phase.LEADERBOARD
+		_fetch_leaderboard()
+		return
+	# Embed the recorder JSON as-is. Re-stringifying a parsed Dictionary turns
+	# ints into floats (v/tickHz as 1.0/60.0), which older servers rejected.
+	var mode_id: String = HighscoreChecksum.sanitize_mode_id(submit_mode_id)
+	var body := '{"checksum":"%s","modeId":"%s","replay":%s}' % [
+		pending_checksum,
+		mode_id,
+		replay_json,
+	]
+	status_text = "Uploading replay..."
+	queue_redraw()
+	_replay_gen += 1
+	var headers := PackedStringArray(["Content-Type: application/json"])
+	var url := "%s/api/replays" % HighscoreConfig.API_BASE_URL.trim_suffix("/")
+	var err := _send("replay_upload", url, headers, HTTPClient.METHOD_POST, body, mode_id, _replay_gen)
+	if err != OK:
+		status_text = "Score saved, replay upload failed"
+		phase = Phase.LEADERBOARD
+		_fetch_leaderboard()
+		queue_redraw()
+
+
+func _fetch_and_play_replay(checksum: String) -> void:
+	if checksum.is_empty():
+		return
+	status_text = "Loading replay..."
+	queue_redraw()
+	_replay_gen += 1
+	var generation := _replay_gen
+	var mode_id: String = HighscoreChecksum.sanitize_mode_id(view_mode_id if not view_mode_id.is_empty() else submit_mode_id)
+	var url := "%s/api/replays/%s" % [
+		HighscoreConfig.API_BASE_URL.trim_suffix("/"),
+		checksum.uri_encode(),
+	]
+	var err := _send("replay_fetch", url, PackedStringArray(), HTTPClient.METHOD_GET, "", mode_id, generation)
+	if err != OK:
+		status_text = "Replay unavailable"
 		queue_redraw()
 
 
@@ -575,7 +722,7 @@ func _send(
 	generation: int
 ) -> int:
 	var http := HTTPRequest.new()
-	http.timeout = 8.0
+	http.timeout = 12.0
 	add_child(http)
 	http.request_completed.connect(func(result: int, response_code: int, response_headers: PackedStringArray, response_body: PackedByteArray) -> void:
 		_on_request_completed(http, kind, mode_id, generation, result, response_code, response_headers, response_body)
@@ -605,6 +752,8 @@ func _on_request_completed(
 		or mode_id != HighscoreChecksum.sanitize_mode_id(view_mode_id)
 	):
 		return
+	if kind in ["replay_upload", "replay_fetch"] and generation != _replay_gen:
+		return
 	var text := body.get_string_from_utf8()
 
 	if kind == "submit":
@@ -612,9 +761,7 @@ func _on_request_completed(
 			var parsed = JSON.parse_string(text)
 			if typeof(parsed) == TYPE_DICTIONARY:
 				submitted_rank = int(parsed.get("rank", -1))
-			status_text = ""
-			phase = Phase.LEADERBOARD
-			_fetch_leaderboard()
+			_maybe_upload_replay_after_score()
 		elif response_code == 409:
 			status_text = "Duplicate score"
 			phase = Phase.LEADERBOARD
@@ -626,6 +773,33 @@ func _on_request_completed(
 		queue_redraw()
 		return
 
+	if kind == "replay_upload":
+		if response_code == 200:
+			status_text = ""
+		else:
+			status_text = "Score saved, replay upload failed"
+		phase = Phase.LEADERBOARD
+		_fetch_leaderboard()
+		queue_redraw()
+		return
+
+	if kind == "replay_fetch":
+		if response_code == 200:
+			var parsed = JSON.parse_string(text)
+			if typeof(parsed) == TYPE_DICTIONARY:
+				var main := get_parent()
+				if main != null and main.has_method("start_replay_from_data"):
+					if main.start_replay_from_data(parsed):
+						status_text = ""
+						close_overlay()
+						queue_redraw()
+						return
+			status_text = "Replay invalid"
+		else:
+			status_text = "Replay unavailable"
+		queue_redraw()
+		return
+
 	if kind == "leaderboard":
 		if response_code == 200:
 			var parsed = JSON.parse_string(text)
@@ -633,7 +807,7 @@ func _on_request_completed(
 				entries = parsed
 			else:
 				entries = []
-			if status_text == "Submitting...":
+			if status_text == "Submitting..." or status_text == "Uploading replay..." or status_text == "Loading replay...":
 				status_text = ""
 		else:
 			entries = []
@@ -653,10 +827,11 @@ func _layout_name_targets(vp: Vector2) -> Rect2:
 	var touch_ui := PlayDevice.is_touch_primary()
 	_submit_rect = Rect2()
 	_skip_rect = Rect2()
+	_replay_toggle_rect = Rect2()
 	_name_field_rect = Rect2()
 	if not touch_ui:
 		var desktop_w := mini(420.0 * ui_scale, vp.x - 40.0)
-		var desktop_h := 230.0 * ui_scale
+		var desktop_h := 340.0 * ui_scale
 		var panel := Rect2((vp.x - desktop_w) * 0.5, (vp.y - desktop_h) * 0.5 + 36.0 * ui_scale, desktop_w, desktop_h)
 		var field_h := 44.0 * ui_scale
 		_name_field_rect = Rect2(
@@ -665,9 +840,26 @@ func _layout_name_targets(vp: Vector2) -> Rect2:
 			panel.size.x - 40.0 * ui_scale,
 			field_h
 		)
+		var toggle_w := maxf(72.0, 70.0 * ui_scale)
+		var toggle_h := 36.0 * ui_scale
+		var label_w := _body_font.get_string_size("Send replay", HORIZONTAL_ALIGNMENT_LEFT, -1, maxi(14, int(round(18 * ui_scale)))).x if _body_font != null else 110.0
+		var row_w := label_w + 10.0 * ui_scale + toggle_w
+		var row_x := panel.get_center().x - row_w * 0.5
+		_replay_toggle_rect = Rect2(
+			row_x + label_w + 10.0 * ui_scale,
+			_name_field_rect.end.y + 14.0 * ui_scale,
+			toggle_w,
+			toggle_h
+		)
+		var gap := 8.0 * ui_scale
+		var button_h := 40.0 * ui_scale
+		var button_w := (panel.size.x - 40.0 * ui_scale - gap) * 0.5
+		var button_y := panel.end.y - button_h - 16.0 * ui_scale
+		_skip_rect = Rect2(panel.position.x + 20.0 * ui_scale, button_y, button_w, button_h)
+		_submit_rect = Rect2(_skip_rect.end.x + gap, button_y, button_w, button_h)
 		return panel
 	var panel_w := mini(maxf(420.0 * ui_scale, 300.0), vp.x - 16.0)
-	var panel_h := minf(maxf(250.0, 210.0 * ui_scale), vp.y - 16.0)
+	var panel_h := minf(maxf(300.0, 260.0 * ui_scale), vp.y - 16.0)
 	var panel := Rect2((vp.x - panel_w) * 0.5, maxf(8.0, (vp.y - panel_h) * 0.35), panel_w, panel_h)
 	var gap := 8.0
 	var button_h := 44.0
@@ -675,7 +867,17 @@ func _layout_name_targets(vp: Vector2) -> Rect2:
 	var button_y := panel.end.y - button_h - 12.0
 	_skip_rect = Rect2(panel.position.x + 12.0, button_y, button_w, button_h)
 	_submit_rect = Rect2(_skip_rect.end.x + gap, button_y, button_w, button_h)
-	_name_field_rect = Rect2(panel.position.x + 20.0, button_y - 56.0, panel.size.x - 40.0, 44.0)
+	_name_field_rect = Rect2(panel.position.x + 20.0, button_y - 112.0, panel.size.x - 40.0, 44.0)
+	var toggle_w := 72.0
+	var label_w := _body_font.get_string_size("Send replay", HORIZONTAL_ALIGNMENT_LEFT, -1, maxi(14, int(round(18 * ui_scale)))).x if _body_font != null else 110.0
+	var row_w := label_w + 10.0 + toggle_w
+	var row_x := panel.get_center().x - row_w * 0.5
+	_replay_toggle_rect = Rect2(
+		row_x + label_w + 10.0,
+		_name_field_rect.end.y + 10.0,
+		toggle_w,
+		40.0
+	)
 	return panel
 
 
@@ -703,7 +905,7 @@ func _layout_leaderboard(vp: Vector2) -> Rect2:
 	var panel_w := mini(480.0 * ui_scale, vp.x - 32.0)
 	if touch_ui:
 		panel_w = mini(maxf(480.0 * ui_scale, 300.0), vp.x - 16.0)
-	var row_h := 26.0 * ui_scale
+	var row_h := 28.0 * ui_scale
 	var rows := maxi(1, entries.size())
 	var tab_h := maxf(36.0, 32.0 * ui_scale)
 	var action_h := 56.0 if touch_ui else 0.0
@@ -732,14 +934,14 @@ func _layout_leaderboard(vp: Vector2) -> Rect2:
 	return panel
 
 
-func _draw_choice(rect: Rect2, label: String, selected: bool) -> void:
+func _draw_choice(rect: Rect2, label: String, selected: bool, font_size: int = 14) -> void:
 	if rect.size.x <= 0.0:
 		return
 	var fill := Color("123047", 0.96) if selected else Color("071018", 0.94)
 	var border := Color("8ef7ff", 0.9) if selected else Color("8ef7ff", 0.4)
 	draw_rect(rect, fill, true, -1.0, true)
 	draw_rect(rect, border, false, 2.0, true)
-	var size := 14
+	var size := font_size
 	var baseline := rect.position.y + (rect.size.y + _body_font.get_ascent(size) - _body_font.get_descent(size)) * 0.5
 	_draw_centered(_body_font, Vector2(rect.get_center().x, baseline), label, size, Color("e8f7ff"))
 

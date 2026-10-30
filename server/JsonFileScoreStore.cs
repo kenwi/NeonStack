@@ -248,19 +248,21 @@ public sealed class JsonFileScoreStore
                 return false;
             }
 
-            if (!root.TryGetProperty("v", out var version) || version.GetInt32() != 1)
+            if (!root.TryGetProperty("v", out var version) || !TryReadInt(version, out var versionValue) ||
+                versionValue != 1)
             {
                 error = "Unsupported replay version.";
                 return false;
             }
 
-            if (!root.TryGetProperty("seed", out _))
+            if (!root.TryGetProperty("seed", out var seed) || !TryReadInt(seed, out _))
             {
                 error = "Replay seed is required.";
                 return false;
             }
 
-            if (!root.TryGetProperty("tickHz", out var tickHz) || tickHz.GetInt32() != 60)
+            if (!root.TryGetProperty("tickHz", out var tickHz) || !TryReadInt(tickHz, out var tickHzValue) ||
+                tickHzValue != 60)
             {
                 error = "Replay tickHz must be 60.";
                 return false;
@@ -288,14 +290,14 @@ public sealed class JsonFileScoreStore
         {
             using var doc = JsonDocument.Parse(replayJson);
             var root = doc.RootElement;
-            if (root.TryGetProperty("finalScore", out var score) && score.TryGetInt32(out var finalScore) &&
+            if (root.TryGetProperty("finalScore", out var score) && TryReadInt(score, out var finalScore) &&
                 finalScore != entry.FinalScore)
             {
                 error = "Replay finalScore does not match stored score.";
                 return false;
             }
 
-            if (root.TryGetProperty("linesCleared", out var lines) && lines.TryGetInt32(out var linesCleared) &&
+            if (root.TryGetProperty("linesCleared", out var lines) && TryReadInt(lines, out var linesCleared) &&
                 linesCleared != entry.LinesCleared)
             {
                 error = "Replay linesCleared does not match stored score.";
@@ -309,6 +311,27 @@ public sealed class JsonFileScoreStore
             error = "Replay JSON is invalid.";
             return false;
         }
+    }
+
+    /// <summary>Godot JSON often emits ints as floats (1.0). Accept both.</summary>
+    private static bool TryReadInt(JsonElement element, out int value)
+    {
+        if (element.TryGetInt32(out value))
+            return true;
+
+        if (element.ValueKind == JsonValueKind.Number &&
+            element.TryGetDouble(out var number) &&
+            double.IsFinite(number) &&
+            Math.Abs(number - Math.Truncate(number)) < 0.0000001 &&
+            number >= int.MinValue &&
+            number <= int.MaxValue)
+        {
+            value = (int)number;
+            return true;
+        }
+
+        value = 0;
+        return false;
     }
 
     private static bool ContainsChecksum(HighscoreStoreData data, string checksum) =>

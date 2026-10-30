@@ -3,9 +3,13 @@ extends Node2D
 ## Stylized neon-arcade Tetris clone.
 
 const PlayDevice = preload("res://game/platform/play_device.gd")
+const ReplayActions = preload("res://game/replay/actions.gd")
+const ReplayFormat = preload("res://game/replay/replay_format.gd")
 
 const COLS := 10
 const ROWS := 20
+const TICK_HZ := 60
+const TICK_DT := 1.0 / float(TICK_HZ)
 const REF_CELL := 36.0
 const MIN_CELL := 18.0
 const MIN_CELL_TOUCH := 6.0
@@ -38,7 +42,7 @@ const HELP_KEYS := [
 	["M", "Mute music"],
 	["N", "Next track"],
 	["PgUp / PgDn", "Music volume"],
-	["Esc", "Pause"],
+	["Esc", "Pause / stop replay"],
 	["R", "Restart"],
 	["L", "Highscores"],
 	["F / F11", "Fullscreen"],
@@ -156,6 +160,15 @@ var move_held := 0
 var clear_flash: Array = []
 var clear_timer := 0.0
 var pulse := 0.0
+var run_seed := 0
+var sim_tick := 0
+var tick_accum := 0.0
+var bag_rng := RandomNumberGenerator.new()
+var held_left := false
+var held_right := false
+var held_soft := false
+var replay_mode := false
+var replay_status := ""
 
 var board_origin := Vector2.ZERO
 var cell_size := REF_CELL
@@ -181,9 +194,12 @@ var body_font: Font
 @onready var highscores = $Highscores
 @onready var juice = $Juice
 @onready var touch = $TouchControls
+@onready var replay_recorder = $ReplayRecorder
+@onready var replay_player = $ReplayPlayer
 
 var _touch_close_rect := Rect2()
 var _touch_restart_rect := Rect2()
+var _replay_close_rect := Rect2()
 
 
 func _board_size() -> Vector2:
@@ -198,6 +214,15 @@ func _set_game_over() -> void:
 	if game_over:
 		return
 	game_over = true
+	if replay_mode:
+		if replay_recorder != null:
+			replay_recorder.stop()
+		if replay_player != null:
+			replay_player.notify_game_over(self)
+		queue_redraw()
+		return
+	if replay_recorder != null:
+		replay_recorder.stop()
 	if highscores != null:
 		highscores.begin_game_over(score, lines_cleared, level, elapsed_seconds)
 
@@ -205,6 +230,8 @@ func _set_game_over() -> void:
 func _ready() -> void:
 	title_font = ThemeDB.fallback_font
 	body_font = ThemeDB.fallback_font
+	if replay_player != null:
+		replay_player.finished.connect(_on_replay_finished)
 	_layout()
 	_new_game()
 	# Desktop: show keyboard controls before the first piece drops.
@@ -293,7 +320,7 @@ func _layout() -> void:
 	queue_redraw()
 
 
-func _new_game() -> void:
+func _new_game(seed_override: int = -1) -> void:
 	board = []
 	for _y in ROWS:
 		var row: Array = []
@@ -321,17 +348,41 @@ func _new_game() -> void:
 	arr_timer = 0.0
 	soft_timer = 0.0
 	move_held = 0
-	if highscores != null:
+	held_left = false
+	held_right = false
+	held_soft = false
+	sim_tick = 0
+	tick_accum = 0.0
+	if seed_override >= 0:
+		run_seed = seed_override
+	else:
+		run_seed = _make_run_seed()
+	bag_rng.seed = run_seed
+	if highscores != null and not replay_mode:
 		highscores.reset_run()
 	if juice != null:
 		juice.reset_run()
+	if replay_recorder != null:
+		if replay_mode:
+			replay_recorder.clear()
+		else:
+			replay_recorder.begin(run_seed)
 	_spawn_next()
 	queue_redraw()
 
 
+func _make_run_seed() -> int:
+	var mixed := int(Time.get_unix_time_from_system() * 1_000_000.0) ^ Time.get_ticks_usec()
+	return hash(mixed)
+
+
 func _refill_bag() -> void:
 	var next_bag := BAG_ORDER.duplicate()
-	next_bag.shuffle()
+	for i in range(next_bag.size() - 1, 0, -1):
+		var j := bag_rng.randi_range(0, i)
+		var swap: String = next_bag[i]
+		next_bag[i] = next_bag[j]
+		next_bag[j] = swap
 	bag.append_array(next_bag)
 
 
@@ -425,7 +476,7 @@ func _hard_drop() -> void:
 	while _try_move(0, 1):
 		dist += 1
 	score += dist * 2
-	if juice != null and dist > 0:
+	if juice != null and dist > 0 and not replay_mode:
 		var col: Color = COLORS[piece_id]
 		juice.hard_drop(from_cells, _cells(piece_id, piece_rot, piece_pos), col, board_origin, cell_size)
 		juice.note_score(score, _board_center())
@@ -548,44 +599,57 @@ func _process(delta: float) -> void:
 	if game_over or paused or help_open or score_open or _highscores_open():
 		queue_redraw()
 		return
+	tick_accum += delta
+	var guard := 0
+	while tick_accum >= TICK_DT and guard < 8:
+		tick_accum -= TICK_DT
+		if replay_mode and replay_player != null:
+			replay_player.inject_for_tick(sim_tick, self)
+		_sim_tick()
+		sim_tick += 1
+		guard += 1
+		if game_over or paused or help_open or score_open or _highscores_open():
+			break
+	queue_redraw()
+
+
+func _sim_tick() -> void:
 	if clear_timer > 0.0:
-		clear_timer -= delta
+		clear_timer = maxf(0.0, clear_timer - TICK_DT)
 		if clear_timer <= 0.0:
 			_finish_line_clear()
-		queue_redraw()
 		return
-	elapsed_seconds += delta
-	_handle_das(delta)
-	if Input.is_action_pressed("ui_down"):
-		soft_timer -= delta
+	elapsed_seconds += TICK_DT
+	_handle_das(TICK_DT)
+	if held_soft:
+		soft_timer -= TICK_DT
 		if soft_timer <= 0.0:
 			if _try_move(0, 1):
 				score += 1
-				if juice != null:
+				if juice != null and not replay_mode:
 					juice.note_score(score, _board_center())
 			soft_timer = 0.035
 	else:
 		soft_timer = 0.0
-		drop_timer += delta
+		drop_timer += TICK_DT
 		if drop_timer >= _drop_interval():
 			drop_timer = 0.0
 			if not _try_move(0, 1):
 				pass
 	if _grounded():
-		lock_timer += delta
+		lock_timer += TICK_DT
 		if lock_timer >= 0.5:
 			_lock_piece()
 	else:
 		lock_timer = 0.0
 		lock_resets = 0
-	queue_redraw()
 
 
 func _handle_das(delta: float) -> void:
 	var dir := 0
-	if Input.is_action_pressed("ui_left"):
+	if held_left:
 		dir -= 1
-	if Input.is_action_pressed("ui_right"):
+	if held_right:
 		dir += 1
 	if dir == 0:
 		move_held = 0
@@ -604,6 +668,97 @@ func _handle_das(delta: float) -> void:
 		if arr_timer <= 0.0:
 			_try_move(dir, 0)
 			arr_timer = 0.03
+
+
+func apply_action(action: String, record: bool = true) -> void:
+	if not ReplayActions.is_known(action):
+		return
+	if record and not replay_mode and replay_recorder != null:
+		replay_recorder.record(sim_tick, action)
+	match action:
+		ReplayActions.LEFT_ON:
+			held_left = true
+		ReplayActions.LEFT_OFF:
+			held_left = false
+		ReplayActions.RIGHT_ON:
+			held_right = true
+		ReplayActions.RIGHT_OFF:
+			held_right = false
+		ReplayActions.SOFT_ON:
+			held_soft = true
+		ReplayActions.SOFT_OFF:
+			held_soft = false
+		ReplayActions.ROT:
+			if _can_accept_play_action():
+				_try_rotate(1)
+		ReplayActions.CCW:
+			if _can_accept_play_action():
+				_try_rotate(-1)
+		ReplayActions.DROP:
+			if _can_accept_play_action():
+				_hard_drop()
+		ReplayActions.HOLD:
+			if _can_accept_play_action():
+				_hold()
+		ReplayActions.NUDGE_LEFT:
+			if _can_accept_play_action():
+				_try_move(-1, 0)
+		ReplayActions.NUDGE_RIGHT:
+			if _can_accept_play_action():
+				_try_move(1, 0)
+
+
+func _can_accept_play_action() -> bool:
+	return (
+		not game_over
+		and not paused
+		and not help_open
+		and not score_open
+		and clear_timer <= 0.0
+		and not _highscores_open()
+	)
+
+
+func get_replay_json() -> String:
+	if replay_recorder == null:
+		return ""
+	return replay_recorder.export_json(self)
+
+
+func has_replay_recording() -> bool:
+	return replay_recorder != null and replay_recorder.has_events()
+
+
+func start_replay_from_data(data: Dictionary) -> bool:
+	if replay_player == null or not replay_player.load_replay(data):
+		return false
+	replay_mode = true
+	replay_status = "Playing replay"
+	if highscores != null:
+		highscores.close_overlay()
+		highscores.reset_run()
+	_new_game(replay_player.get_seed())
+	help_open = false
+	score_open = false
+	paused = false
+	queue_redraw()
+	return true
+
+
+func stop_replay() -> void:
+	if not replay_mode:
+		return
+	replay_mode = false
+	replay_status = ""
+	if replay_player != null:
+		replay_player.stop()
+	_new_game()
+	queue_redraw()
+
+
+func _on_replay_finished(matched: bool) -> void:
+	replay_status = "Replay finished" if matched else "Replay finished (mismatch)"
+	queue_redraw()
 
 
 func _key_pressed(event: InputEvent, code: Key) -> bool:
@@ -651,6 +806,9 @@ func _handle_touch_overlay(event: InputEvent) -> bool:
 		return false
 	_sync_touch_overlay_rects()
 	var point := PlayDevice.pointer_down_position(event)
+	if replay_mode and _replay_close_rect.size.x > 0.0 and _replay_close_rect.has_point(point):
+		stop_replay()
+		return true
 	if _touch_close_rect.size.x > 0.0 and _touch_close_rect.has_point(point):
 		help_open = false
 		score_open = false
@@ -725,10 +883,17 @@ func _input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		return
 	if _key_pressed(event, KEY_R):
-		_new_game()
+		if replay_mode:
+			stop_replay()
+		else:
+			_new_game()
 		get_viewport().set_input_as_handled()
 		return
 	if event.is_action_pressed("ui_cancel"):
+		if replay_mode:
+			stop_replay()
+			get_viewport().set_input_as_handled()
+			return
 		if help_open or score_open:
 			help_open = false
 			score_open = false
@@ -746,6 +911,9 @@ func _input(event: InputEvent) -> void:
 		queue_redraw()
 		get_viewport().set_input_as_handled()
 		return
+	if replay_mode:
+		get_viewport().set_input_as_handled()
+		return
 	if game_over:
 		if (
 			_key_pressed(event, KEY_SPACE)
@@ -754,6 +922,15 @@ func _input(event: InputEvent) -> void:
 		):
 			_new_game()
 			get_viewport().set_input_as_handled()
+		return
+	if help_open and (
+		_key_pressed(event, KEY_SPACE)
+		or _key_pressed(event, KEY_ENTER)
+		or _key_pressed(event, KEY_KP_ENTER)
+	):
+		help_open = false
+		queue_redraw()
+		get_viewport().set_input_as_handled()
 		return
 	if help_open or score_open or _highscores_open():
 		get_viewport().set_input_as_handled()
@@ -768,22 +945,46 @@ func _input(event: InputEvent) -> void:
 	if clear_timer > 0.0:
 		get_viewport().set_input_as_handled()
 		return
+	if _handle_gameplay_action_event(event):
+		get_viewport().set_input_as_handled()
+
+
+func _handle_gameplay_action_event(event: InputEvent) -> bool:
+	if event.is_action_pressed("ui_left"):
+		apply_action(ReplayActions.LEFT_ON)
+		return true
+	if event.is_action_released("ui_left"):
+		apply_action(ReplayActions.LEFT_OFF)
+		return true
+	if event.is_action_pressed("ui_right"):
+		apply_action(ReplayActions.RIGHT_ON)
+		return true
+	if event.is_action_released("ui_right"):
+		apply_action(ReplayActions.RIGHT_OFF)
+		return true
+	if event.is_action_pressed("ui_down"):
+		apply_action(ReplayActions.SOFT_ON)
+		return true
+	if event.is_action_released("ui_down"):
+		apply_action(ReplayActions.SOFT_OFF)
+		return true
 	if event.is_action_pressed("ui_up") or _key_pressed(event, KEY_X):
-		_try_rotate(1)
-		get_viewport().set_input_as_handled()
-	elif _key_pressed(event, KEY_Z):
-		_try_rotate(-1)
-		get_viewport().set_input_as_handled()
-	elif (
+		apply_action(ReplayActions.ROT)
+		return true
+	if _key_pressed(event, KEY_Z):
+		apply_action(ReplayActions.CCW)
+		return true
+	if (
 		_key_pressed(event, KEY_SPACE)
 		or _key_pressed(event, KEY_ENTER)
 		or _key_pressed(event, KEY_KP_ENTER)
 	):
-		_hard_drop()
-		get_viewport().set_input_as_handled()
-	elif _key_pressed(event, KEY_C) or _key_pressed(event, KEY_SHIFT):
-		_hold()
-		get_viewport().set_input_as_handled()
+		apply_action(ReplayActions.DROP)
+		return true
+	if _key_pressed(event, KEY_C) or _key_pressed(event, KEY_SHIFT):
+		apply_action(ReplayActions.HOLD)
+		return true
+	return false
 
 
 func _draw() -> void:
@@ -1206,9 +1407,18 @@ func _draw_overlays(vp: Vector2) -> void:
 		_draw_info_table(vp, "SCORE", SCORE_HELP_ROWS, "S or Esc to close")
 		return
 	if help_open:
-		_draw_info_table(vp, "CONTROLS", _help_rows(), "H or Esc to close")
+		_draw_info_table(vp, "CONTROLS", _help_rows(), "Space / Enter / Esc to start")
 		return
 	var center := _board_center()
+	if replay_mode:
+		_draw_centered_label(center, replay_status if not replay_status.is_empty() else "REPLAY", title_font, 28, Color("ffd166"), -vp.y * 0.42)
+		var stop_hint := "Tap CLOSE to stop" if PlayDevice.is_touch_primary() else "Esc stop replay"
+		_draw_centered_label(center, stop_hint, body_font, 16, Color("e8f7ff", 0.85), -vp.y * 0.42 + 28.0)
+		if PlayDevice.is_touch_primary():
+			_replay_close_rect = Rect2(vp.x * 0.5 - 80.0, 12.0, 160.0, 44.0)
+			_draw_overlay_button(_replay_close_rect, "CLOSE")
+		else:
+			_replay_close_rect = Rect2()
 	if paused:
 		draw_rect(Rect2(Vector2.ZERO, vp), Color(0, 0, 0, 0.55))
 		_draw_centered_label(center, "PAUSED", title_font, 42, Color("8ef7ff"), -24.0)

@@ -27,9 +27,9 @@ docker compose up -d --build
 
 API:
 
-- `GET  http://localhost:5080/api/scores/classic?top=10`
-- `GET  http://localhost:5080/api/scores/classic-mobile?top=10`
-- `POST http://localhost:5080/api/scores`
+- `GET  http://localhost:5090/api/scores/classic?top=10`
+- `GET  http://localhost:5090/api/scores/classic-mobile?top=10`
+- `POST http://localhost:5090/api/scores`
 
 Keyboard play submits `modeId` `classic`. Touch-primary play (phone and tablet browsers) submits `classic-mobile`. The checksum includes the mode id, so each board is a separate list. Existing classic scores stay on the classic board.
 
@@ -90,7 +90,7 @@ Cloudflare Tunnel exposes the API without opening inbound ports. TLS terminates 
 
 ```bash
 TUNNEL_TOKEN=eyJhIjoi...
-HIGHSCORES_PORT=5080
+HIGHSCORES_PORT=5090
 ```
 
 ### 3. Start server + tunnel
@@ -108,7 +108,7 @@ In the tunnel's **Public Hostname** settings:
 | Subdomain | e.g. `tetris-scores` |
 | Domain | your Cloudflare zone |
 | Type | HTTP |
-| URL | `highscores:5080` |
+| URL | `highscores:5090` |
 
 Use the Docker Compose service name (`highscores`), not `localhost`. Both containers share the `tetris-highscores` network.
 

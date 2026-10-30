@@ -1,11 +1,12 @@
 extends Node2D
 
 ## On-screen buttons for touch-primary sessions (phone and tablet browsers).
-## Held move and soft-drop buttons drive the same input actions as the arrow keys.
-## Taps call the existing rotate, hard-drop, and hold paths.
+## Held move and soft-drop buttons feed the same action bus as the keyboard.
+## Taps emit rotate, hard-drop, and hold actions.
 ## A tap that misses the buttons is one of four screen quadrants.
 
 const PlayDevice = preload("res://game/platform/play_device.gd")
+const ReplayActions = preload("res://game/replay/actions.gd")
 
 const GAP := 8.0
 const MIN_BUTTON := 44.0
@@ -17,9 +18,9 @@ const SCALE_DEFAULT := 2
 const CONFIG_PATH := "user://touch.cfg"
 
 const HOLD_ACTIONS := {
-	"left": "ui_left",
-	"right": "ui_right",
-	"down": "ui_down",
+	"left": "left",
+	"right": "right",
+	"down": "soft",
 }
 const TAP_ACTIONS := ["rot", "ccw", "drop", "hold"]
 const UTILITY := ["pause", "help", "scores", "restart", "mute", "full", "zones", "scale_down", "scale_up"]
@@ -46,7 +47,7 @@ const LABELS := {
 
 var _font: Font
 var _fingers: Dictionary = {}
-var _hold_counts := {"ui_left": 0, "ui_right": 0, "ui_down": 0}
+var _hold_counts := {"left": 0, "right": 0, "soft": 0}
 var _rects: Dictionary = {}
 var _scale := SCALE_DEFAULT
 var _show_zones := false
@@ -140,6 +141,8 @@ func _is_overlay_blocking() -> bool:
 		return true
 	if main.help_open or main.score_open or main.game_over:
 		return true
+	if main.replay_mode:
+		return true
 	if main.highscores != null and main.highscores.is_showing_overlay():
 		return true
 	return false
@@ -229,13 +232,13 @@ func _on_press(id: String) -> void:
 		return
 	var main := get_parent()
 	if id == "rot" and _can_play():
-		main._try_rotate(1)
+		main.apply_action(ReplayActions.ROT)
 	elif id == "ccw" and _can_play():
-		main._try_rotate(-1)
-	elif id == "drop":
-		main._hard_drop()
-	elif id == "hold":
-		main._hold()
+		main.apply_action(ReplayActions.CCW)
+	elif id == "drop" and _can_play():
+		main.apply_action(ReplayActions.DROP)
+	elif id == "hold" and _can_play():
+		main.apply_action(ReplayActions.HOLD)
 	elif id == "pause":
 		main.paused = not main.paused
 		main.queue_redraw()
@@ -252,7 +255,10 @@ func _on_press(id: String) -> void:
 			main.highscores.open_leaderboard()
 		main.queue_redraw()
 	elif id == "restart":
-		main._new_game()
+		if main.replay_mode:
+			main.stop_replay()
+		else:
+			main._new_game()
 	elif id == "mute":
 		var music := main.get_node_or_null("Music")
 		if music != null:
@@ -291,11 +297,11 @@ func _tap_quadrant(pos: Vector2) -> bool:
 	var left := pos.x < mid.x
 	var upper := pos.y < mid.y
 	if upper:
-		main._try_move(-1 if left else 1, 0)
+		main.apply_action(ReplayActions.NUDGE_LEFT if left else ReplayActions.NUDGE_RIGHT)
 	elif left:
-		main._try_rotate(1)
+		main.apply_action(ReplayActions.ROT)
 	else:
-		main._hard_drop()
+		main.apply_action(ReplayActions.DROP)
 	return true
 
 
@@ -315,6 +321,7 @@ func _can_play() -> bool:
 		and not main.paused
 		and not main.help_open
 		and not main.score_open
+		and not main.replay_mode
 		and main.clear_timer <= 0.0
 		and not main._highscores_open()
 	)
@@ -326,24 +333,45 @@ func _is_gameplay(id: String) -> bool:
 
 func _set_hold(action: String, down: bool) -> void:
 	var count: int = int(_hold_counts[action])
+	var main := get_parent()
 	if down:
-		if count == 0:
-			Input.action_press(action)
+		if count == 0 and main != null and main.has_method("apply_action"):
+			match action:
+				"left":
+					main.apply_action(ReplayActions.LEFT_ON)
+				"right":
+					main.apply_action(ReplayActions.RIGHT_ON)
+				"soft":
+					main.apply_action(ReplayActions.SOFT_ON)
 		_hold_counts[action] = count + 1
 	else:
 		count = maxi(0, count - 1)
 		_hold_counts[action] = count
-		if count == 0:
-			Input.action_release(action)
+		if count == 0 and main != null and main.has_method("apply_action"):
+			match action:
+				"left":
+					main.apply_action(ReplayActions.LEFT_OFF)
+				"right":
+					main.apply_action(ReplayActions.RIGHT_OFF)
+				"soft":
+					main.apply_action(ReplayActions.SOFT_OFF)
 
 
 func _release_all() -> void:
-	if _fingers.is_empty() and int(_hold_counts["ui_left"]) == 0 and int(_hold_counts["ui_right"]) == 0 and int(_hold_counts["ui_down"]) == 0:
+	if _fingers.is_empty() and int(_hold_counts["left"]) == 0 and int(_hold_counts["right"]) == 0 and int(_hold_counts["soft"]) == 0:
 		return
 	_fingers.clear()
 	for action in _hold_counts.keys():
 		if int(_hold_counts[action]) > 0:
-			Input.action_release(action)
+			var main := get_parent()
+			if main != null and main.has_method("apply_action"):
+				match str(action):
+					"left":
+						main.apply_action(ReplayActions.LEFT_OFF)
+					"right":
+						main.apply_action(ReplayActions.RIGHT_OFF)
+					"soft":
+						main.apply_action(ReplayActions.SOFT_OFF)
 		_hold_counts[action] = 0
 	queue_redraw()
 

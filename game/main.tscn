@@ -5,6 +5,8 @@
 [ext_resource type="Script" path="res://game/highscore/highscore_client.gd" id="3_highscores"]
 [ext_resource type="Script" uid="uid://banaf177x13w1" path="res://game/touch/touch_controls.gd" id="4_touch"]
 [ext_resource type="Script" path="res://game/fx/juice.gd" id="5_juice"]
+[ext_resource type="Script" path="res://game/replay/recorder.gd" id="6_replay_rec"]
+[ext_resource type="Script" path="res://game/replay/player.gd" id="7_replay_play"]
 
 [node name="Main" type="Node2D" unique_id=133890310]
 script = ExtResource("1_oa506")
@@ -17,6 +19,12 @@ script = ExtResource("3_highscores")
 
 [node name="Juice" type="Node2D" parent="."]
 script = ExtResource("5_juice")
+
+[node name="ReplayRecorder" type="Node" parent="."]
+script = ExtResource("6_replay_rec")
+
+[node name="ReplayPlayer" type="Node" parent="."]
+script = ExtResource("7_replay_play")
 
 [node name="TouchControls" type="Node2D" parent="."]
 script = ExtResource("4_touch")

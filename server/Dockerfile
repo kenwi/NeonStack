@@ -18,10 +18,10 @@ RUN apt-get update \
 COPY --from=build /app/publish ./
 
 ENV ASPNETCORE_ENVIRONMENT=Production \
-    ASPNETCORE_URLS=http://0.0.0.0:5080 \
+    ASPNETCORE_URLS=http://0.0.0.0:5090 \
     Highscores__FilePath=/data/highscores.json \
     TZ=UTC
 
-EXPOSE 5080
+EXPOSE 5090
 
 ENTRYPOINT ["dotnet", "Tetris.Highscores.Server.dll"]
