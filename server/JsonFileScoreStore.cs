@@ -255,7 +255,8 @@ public sealed class JsonFileScoreStore
                 return false;
             }
 
-            if (!root.TryGetProperty("seed", out var seed) || !TryReadInt(seed, out _))
+            // Godot hash() often exceeds Int32; accept full Int64 JSON integers (and float ints).
+            if (!root.TryGetProperty("seed", out var seed) || !TryReadInt64(seed, out _))
             {
                 error = "Replay seed is required.";
                 return false;
@@ -327,6 +328,27 @@ public sealed class JsonFileScoreStore
             number <= int.MaxValue)
         {
             value = (int)number;
+            return true;
+        }
+
+        value = 0;
+        return false;
+    }
+
+    /// <summary>Same as TryReadInt but for Int64 (Godot hash seeds often exceed Int32.MaxValue).</summary>
+    private static bool TryReadInt64(JsonElement element, out long value)
+    {
+        if (element.TryGetInt64(out value))
+            return true;
+
+        if (element.ValueKind == JsonValueKind.Number &&
+            element.TryGetDouble(out var number) &&
+            double.IsFinite(number) &&
+            Math.Abs(number - Math.Truncate(number)) < 0.0000001 &&
+            number >= long.MinValue &&
+            number <= long.MaxValue)
+        {
+            value = (long)number;
             return true;
         }
 

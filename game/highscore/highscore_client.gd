@@ -164,6 +164,7 @@ func close_overlay() -> void:
 	if not _is_game_over_context():
 		phase = Phase.IDLE
 	_suppress_touch_zones()
+	_sync_parent_holds()
 	queue_redraw()
 
 
@@ -182,12 +183,19 @@ func handle_input(event: InputEvent) -> bool:
 			leaderboard_open = false
 			if not _is_game_over_context():
 				phase = Phase.IDLE
+			_sync_parent_holds()
 			queue_redraw()
 		else:
 			open_leaderboard()
 		return true
 
 	return false
+
+
+func _sync_parent_holds() -> void:
+	var main := get_parent()
+	if main != null and main.has_method("_sync_hold_flags_from_input"):
+		main._sync_hold_flags_from_input()
 
 
 func _is_game_over_context() -> bool:
@@ -308,6 +316,7 @@ func _handle_leaderboard_pointer(event: InputEvent) -> bool:
 		elif phase == Phase.LEADERBOARD:
 			phase = Phase.IDLE
 		_suppress_touch_zones()
+		_sync_parent_holds()
 		queue_redraw()
 		return true
 	if _lb_restart_rect.size.x > 0.0 and _lb_restart_rect.has_point(point):

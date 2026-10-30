@@ -372,8 +372,10 @@ func _new_game(seed_override: int = -1) -> void:
 
 
 func _make_run_seed() -> int:
+	# Godot hash() often exceeds Int32.MaxValue; clamp so replay upload always accepts seed.
 	var mixed := int(Time.get_unix_time_from_system() * 1_000_000.0) ^ Time.get_ticks_usec()
-	return hash(mixed)
+	var h := hash(mixed) & 0x7FFFFFFF
+	return h if h != 0 else 1
 
 
 func _refill_bag() -> void:
@@ -536,6 +538,8 @@ func _finish_line_clear() -> void:
 		board.push_front(row)
 	clear_flash.clear()
 	clear_timer = 0.0
+	# Catch any hold release missed before releases were accepted during clear.
+	_sync_hold_flags_from_input()
 	lines_cleared += cleared
 	var points: int = int(SCORE_TABLE[cleared]) * level
 	score += points
@@ -812,6 +816,7 @@ func _handle_touch_overlay(event: InputEvent) -> bool:
 	if _touch_close_rect.size.x > 0.0 and _touch_close_rect.has_point(point):
 		help_open = false
 		score_open = false
+		_sync_hold_flags_from_input()
 		if touch != null:
 			touch.suppress_play_taps()
 		queue_redraw()
@@ -825,6 +830,7 @@ func _handle_touch_overlay(event: InputEvent) -> bool:
 			touch.suppress_play_taps()
 		help_open = false
 		score_open = false
+		_sync_hold_flags_from_input()
 		queue_redraw()
 		return true
 	return false
@@ -858,6 +864,8 @@ func _input(event: InputEvent) -> void:
 			score_open = false
 			if highscores != null:
 				highscores.close_overlay()
+		else:
+			_sync_hold_flags_from_input()
 		queue_redraw()
 		get_viewport().set_input_as_handled()
 		return
@@ -867,6 +875,8 @@ func _input(event: InputEvent) -> void:
 			help_open = false
 			if highscores != null:
 				highscores.close_overlay()
+		else:
+			_sync_hold_flags_from_input()
 		queue_redraw()
 		get_viewport().set_input_as_handled()
 		return
@@ -897,8 +907,10 @@ func _input(event: InputEvent) -> void:
 		if help_open or score_open:
 			help_open = false
 			score_open = false
+			_sync_hold_flags_from_input()
 		elif _highscores_open() and highscores != null and not highscores.is_capturing_input():
 			highscores.close_overlay()
+			_sync_hold_flags_from_input()
 		elif DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_FULLSCREEN \
 			or DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN:
 			DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
@@ -923,12 +935,19 @@ func _input(event: InputEvent) -> void:
 			_new_game()
 			get_viewport().set_input_as_handled()
 		return
+	# Hold releases must never be dropped: missing OFF leaves DAS stuck after clear/UI/pause.
+	# Presses during line-clear are allowed so DAS can charge through ARE; discrete moves stay blocked.
+	var overlay_blocks_play := help_open or score_open or _highscores_open() or paused
+	if _handle_hold_action_event(event, not overlay_blocks_play):
+		get_viewport().set_input_as_handled()
+		return
 	if help_open and (
 		_key_pressed(event, KEY_SPACE)
 		or _key_pressed(event, KEY_ENTER)
 		or _key_pressed(event, KEY_KP_ENTER)
 	):
 		help_open = false
+		_sync_hold_flags_from_input()
 		queue_redraw()
 		get_viewport().set_input_as_handled()
 		return
@@ -938,36 +957,43 @@ func _input(event: InputEvent) -> void:
 	if paused:
 		if event.is_pressed() and not event.is_echo():
 			paused = false
+			_sync_hold_flags_from_input()
 			queue_redraw()
 			get_viewport().set_input_as_handled()
 		return
-	# Line-clear flash owns the board; ignore play input until rows are removed.
+	# Line-clear flash: holds already handled above; block rotate/drop/hold until rows go.
 	if clear_timer > 0.0:
 		get_viewport().set_input_as_handled()
 		return
-	if _handle_gameplay_action_event(event):
+	if _handle_discrete_gameplay_action_event(event):
 		get_viewport().set_input_as_handled()
 
 
-func _handle_gameplay_action_event(event: InputEvent) -> bool:
-	if event.is_action_pressed("ui_left"):
-		apply_action(ReplayActions.LEFT_ON)
-		return true
+func _handle_hold_action_event(event: InputEvent, allow_press: bool) -> bool:
 	if event.is_action_released("ui_left"):
 		apply_action(ReplayActions.LEFT_OFF)
-		return true
-	if event.is_action_pressed("ui_right"):
-		apply_action(ReplayActions.RIGHT_ON)
 		return true
 	if event.is_action_released("ui_right"):
 		apply_action(ReplayActions.RIGHT_OFF)
 		return true
-	if event.is_action_pressed("ui_down"):
-		apply_action(ReplayActions.SOFT_ON)
-		return true
 	if event.is_action_released("ui_down"):
 		apply_action(ReplayActions.SOFT_OFF)
 		return true
+	if not allow_press:
+		return false
+	if event.is_action_pressed("ui_left"):
+		apply_action(ReplayActions.LEFT_ON)
+		return true
+	if event.is_action_pressed("ui_right"):
+		apply_action(ReplayActions.RIGHT_ON)
+		return true
+	if event.is_action_pressed("ui_down"):
+		apply_action(ReplayActions.SOFT_ON)
+		return true
+	return false
+
+
+func _handle_discrete_gameplay_action_event(event: InputEvent) -> bool:
 	if event.is_action_pressed("ui_up") or _key_pressed(event, KEY_X):
 		apply_action(ReplayActions.ROT)
 		return true
@@ -985,6 +1011,41 @@ func _handle_gameplay_action_event(event: InputEvent) -> bool:
 		apply_action(ReplayActions.HOLD)
 		return true
 	return false
+
+
+## Live-only: align hold flags with the keyboard after UI/focus gaps (records via apply_action).
+func _sync_hold_flags_from_input() -> void:
+	if replay_mode or game_over:
+		return
+	_sync_hold_flag("ui_left", held_left, ReplayActions.LEFT_ON, ReplayActions.LEFT_OFF)
+	_sync_hold_flag("ui_right", held_right, ReplayActions.RIGHT_ON, ReplayActions.RIGHT_OFF)
+	_sync_hold_flag("ui_down", held_soft, ReplayActions.SOFT_ON, ReplayActions.SOFT_OFF)
+
+
+func _sync_hold_flag(action_name: String, is_held: bool, on_action: String, off_action: String) -> void:
+	var down := Input.is_action_pressed(action_name)
+	if down and not is_held:
+		apply_action(on_action)
+	elif not down and is_held:
+		apply_action(off_action)
+
+
+func _release_held_moves_for_focus_loss() -> void:
+	if replay_mode or game_over:
+		return
+	if held_left:
+		apply_action(ReplayActions.LEFT_OFF)
+	if held_right:
+		apply_action(ReplayActions.RIGHT_OFF)
+	if held_soft:
+		apply_action(ReplayActions.SOFT_OFF)
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_APPLICATION_FOCUS_OUT or what == NOTIFICATION_WM_WINDOW_FOCUS_OUT:
+		_release_held_moves_for_focus_loss()
+	elif what == NOTIFICATION_APPLICATION_FOCUS_IN or what == NOTIFICATION_WM_WINDOW_FOCUS_IN:
+		_sync_hold_flags_from_input()
 
 
 func _draw() -> void:
