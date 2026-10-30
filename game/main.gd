@@ -48,6 +48,7 @@ const HELP_KEYS := [
 	["L", "Highscores"],
 	["F / F11", "Fullscreen"],
 	["J", "Toggle juice FX"],
+	["B", "Cycle background"],
 	["G", "Toggle rank greetings"],
 	["Q", "Quit"],
 	["H", "Toggle this help"],
@@ -68,6 +69,7 @@ const HELP_TOUCH := [
 	["Zones", "Show tap zones"],
 	["Full", "Fullscreen"],
 	["Juice", "Toggle juice FX"],
+	["BG", "Cycle background"],
 	["Pause", "Pause"],
 	["Restart", "Restart"],
 	["Scores", "Highscores"],
@@ -75,6 +77,8 @@ const HELP_TOUCH := [
 	["Next", "Next track"],
 	["Help", "Toggle this help"],
 ]
+
+enum BackdropMode { LINES_DIM, LINES_BRIGHT, HORIZON }
 const SCORE_HELP_ROWS := [
 	["Soft drop", "+1 per cell"],
 	["Hard drop", "+2 per cell"],
@@ -162,6 +166,8 @@ var move_held := 0
 var clear_flash: Array = []
 var clear_timer := 0.0
 var pulse := 0.0
+## Horizon floor scroll phase (advances at a level-scaled rate).
+var backdrop_scroll := 0.0
 var run_seed := 0
 var sim_tick := 0
 var tick_accum := 0.0
@@ -177,6 +183,7 @@ const REPLAY_SPEEDS: Array[float] = [0.5, 1.0, 2.0, 4.0, 8.0]
 ## Best leaderboard place greeted this run (11 = not yet in top 10).
 var _rank_announced := 11
 var leaderboard_greetings := true
+var backdrop_mode: BackdropMode = BackdropMode.HORIZON
 
 var board_origin := Vector2.ZERO
 var cell_size := REF_CELL
@@ -582,6 +589,23 @@ func toggle_juice() -> void:
 	queue_redraw()
 
 
+func cycle_backdrop() -> void:
+	backdrop_mode = ((int(backdrop_mode) + 1) % 3) as BackdropMode
+	if music != null and music.has_method("show_status"):
+		music.show_status("BG %s" % _backdrop_mode_label())
+	queue_redraw()
+
+
+func _backdrop_mode_label() -> String:
+	match backdrop_mode:
+		BackdropMode.LINES_DIM:
+			return "Dim lines"
+		BackdropMode.LINES_BRIGHT:
+			return "Bright lines"
+		_:
+			return "Horizon"
+
+
 func _check_leaderboard_greetings() -> void:
 	if not leaderboard_greetings or replay_mode or highscores == null or juice == null or game_over:
 		return
@@ -659,8 +683,15 @@ func _highscores_open() -> bool:
 	return highscores != null and highscores.is_showing_overlay()
 
 
+func _horizon_scroll_speed() -> float:
+	# Level 1 crawls; level 15 runs quick.
+	var t := clampf(float(level - 1) / 14.0, 0.0, 1.0)
+	return lerpf(0.05, 0.62, t)
+
+
 func _process(delta: float) -> void:
 	pulse += delta
+	backdrop_scroll += delta * _horizon_scroll_speed()
 	if juice != null:
 		juice.tick(delta)
 	if game_over or paused or help_open or score_open or _highscores_open():
@@ -1134,6 +1165,18 @@ func _input(event: InputEvent) -> void:
 		toggle_juice()
 		get_viewport().set_input_as_handled()
 		return
+	if _key_pressed(event, KEY_B):
+		cycle_backdrop()
+		get_viewport().set_input_as_handled()
+		return
+	# Desktop native only: cycle level for backdrop / gravity tuning.
+	if not OS.has_feature("web") and _key_pressed(event, KEY_1):
+		level = 1 if level >= 15 else level + 1
+		if music != null and music.has_method("show_status"):
+			music.show_status("Level %d" % level)
+		queue_redraw()
+		get_viewport().set_input_as_handled()
+		return
 	if _key_pressed(event, KEY_G):
 		_toggle_leaderboard_greetings()
 		get_viewport().set_input_as_handled()
@@ -1317,13 +1360,89 @@ func _draw() -> void:
 
 
 func _draw_backdrop(vp: Vector2) -> void:
+	match backdrop_mode:
+		BackdropMode.LINES_DIM:
+			_draw_backdrop_lines(vp, Color("123047"), 0.18, 1.0)
+		BackdropMode.LINES_BRIGHT:
+			_draw_backdrop_lines(vp, Color("1e4a6e"), 0.42, 1.25)
+		_:
+			_draw_backdrop_horizon(vp)
+
+
+func _draw_backdrop_lines(vp: Vector2, accent: Color, alpha: float, width: float) -> void:
 	draw_rect(Rect2(Vector2.ZERO, vp), Color("071018"))
-	var accent := Color("123047")
-	for i in 18:
-		var y := fposmod(pulse * 18.0 + i * 54.0, vp.y + 80.0) - 40.0
-		draw_line(Vector2(0, y), Vector2(vp.x, y), Color(accent, 0.18), 1.0)
+	var spacing := 54.0
+	var y := fposmod(pulse * 18.0, spacing) - spacing
+	while y < vp.y + spacing:
+		draw_line(Vector2(0, y), Vector2(vp.x, y), Color(accent, alpha), width)
+		y += spacing
+	_draw_backdrop_board_glow(0.05, 0.03)
+
+
+func _draw_backdrop_horizon(vp: Vector2) -> void:
+	# Synthwave-style perspective floor in Neon Stack cyan, rolling toward the player.
+	var sky_top := Color("050b12")
+	var sky_horizon := Color("0b1a28")
+	var steps := 18
+	for i in steps:
+		var t := float(i) / float(steps)
+		var band_h := vp.y / float(steps)
+		draw_rect(
+			Rect2(0.0, float(i) * band_h, vp.x, band_h + 1.0),
+			sky_top.lerp(sky_horizon, t * t)
+		)
+
+	var horizon := vp.y * 0.38
+	var vanish := Vector2(vp.x * 0.5, horizon)
+	var floor_h := maxf(1.0, vp.y - horizon)
+
+	var bloom_pulse := 0.55 + 0.12 * sin(pulse * 1.3)
+	draw_rect(Rect2(0.0, horizon - 28.0, vp.x, 56.0), Color("1ec8ff", 0.04 * bloom_pulse))
+	draw_rect(Rect2(0.0, horizon - 10.0, vp.x, 20.0), Color("8ef7ff", 0.08 * bloom_pulse))
+	draw_line(Vector2(0.0, horizon), Vector2(vp.x, horizon), Color("8ef7ff", 0.75), 2.0)
+	draw_line(Vector2(0.0, horizon), Vector2(vp.x, horizon), Color("1ec8ff", 0.35), 5.0)
+
+	draw_rect(Rect2(0.0, horizon, vp.x, floor_h), Color("071018", 0.92))
+
+	var grid := Color("1ec8ff")
+	var grid_dim := Color("123047")
+
+	var ray_count := 14
+	var half_span := vp.x * 1.35
+	for i in ray_count + 1:
+		var u := float(i) / float(ray_count)
+		var bottom_x := vanish.x + lerpf(-half_span, half_span, u)
+		var edge_fade := 1.0 - absf(u - 0.5) * 1.1
+		var col := grid_dim.lerp(grid, 0.35)
+		col.a = clampf(0.16 + 0.18 * edge_fade, 0.08, 0.34)
+		draw_line(vanish, Vector2(bottom_x, vp.y + 2.0), col, 1.0)
+
+	var depth_lines := 16
+	var scroll := fposmod(backdrop_scroll, 1.0)
+	for i in depth_lines:
+		var d := fposmod((float(i) + 1.0) / float(depth_lines) + scroll, 1.0)
+		var persp := d * d
+		var y := horizon + floor_h * persp
+		if y <= horizon + 1.0 or y > vp.y + 2.0:
+			continue
+		var nearness := persp
+		var col := grid_dim.lerp(grid, 0.25 + 0.55 * nearness)
+		col.a = clampf(0.12 + 0.38 * nearness, 0.1, 0.5)
+		var width := lerpf(1.0, 1.75, nearness)
+		var half_w := half_span * nearness
+		draw_line(
+			Vector2(vanish.x - half_w, y),
+			Vector2(vanish.x + half_w, y),
+			col,
+			width
+		)
+
+	_draw_backdrop_board_glow(0.04, 0.025)
+
+
+func _draw_backdrop_board_glow(base_a: float, pulse_a: float) -> void:
 	var glow := Color("1ec8ff")
-	glow.a = 0.05 + 0.03 * sin(pulse * 1.4)
+	glow.a = base_a + pulse_a * sin(pulse * 1.4)
 	draw_circle(_board_center() + Vector2(0, _board_size().y * -0.05), 280.0, glow)
 
 

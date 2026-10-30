@@ -24,6 +24,7 @@ var pending_checksum := ""
 var include_replay := true
 var submitted_this_run := false
 var leaderboard_open := false
+var leaderboard_page := 0
 var submit_mode_id := ""
 var view_mode_id := ""
 
@@ -45,6 +46,7 @@ var _skip_rect := Rect2()
 var _replay_toggle_rect := Rect2()
 var _name_field_rect := Rect2()
 var _play_hit_targets: Array = []
+var _page_hit_targets: Array = []
 var _title_font: Font
 var _body_font: Font
 var _ui_scale := 1.0
@@ -99,6 +101,7 @@ func reset_run() -> void:
 	entries.clear()
 	submitted_this_run = false
 	leaderboard_open = false
+	leaderboard_page = 0
 	pending_score = 0
 	pending_lines = 0
 	pending_level = 1
@@ -111,6 +114,7 @@ func reset_run() -> void:
 	_replay_gen += 1
 	_submit_lock = false
 	_play_hit_targets.clear()
+	_page_hit_targets.clear()
 	_hide_touch_keyboard()
 	queue_redraw()
 
@@ -143,9 +147,37 @@ func open_leaderboard() -> void:
 		return
 	view_mode_id = submit_mode_id
 	leaderboard_open = true
+	leaderboard_page = 0
 	phase = Phase.LEADERBOARD
 	_fetch_leaderboard()
 	queue_redraw()
+
+
+func _leaderboard_page_count() -> int:
+	if entries.is_empty():
+		return 1
+	return int(ceili(float(entries.size()) / float(HighscoreConfig.LEADERBOARD_PAGE_SIZE)))
+
+
+func _clamp_leaderboard_page() -> void:
+	leaderboard_page = clampi(leaderboard_page, 0, maxi(0, _leaderboard_page_count() - 1))
+
+
+func _set_leaderboard_page(page: int) -> void:
+	var next := clampi(page, 0, maxi(0, _leaderboard_page_count() - 1))
+	if next == leaderboard_page:
+		return
+	leaderboard_page = next
+	queue_redraw()
+
+
+func _page_entries() -> Array:
+	_clamp_leaderboard_page()
+	var page_size := HighscoreConfig.LEADERBOARD_PAGE_SIZE
+	var start := leaderboard_page * page_size
+	if start >= entries.size():
+		return []
+	return entries.slice(start, mini(start + page_size, entries.size()))
 
 
 ## Prefetch top scores used to greet mid-run leaderboard climbs.
@@ -208,6 +240,14 @@ func handle_input(event: InputEvent) -> bool:
 
 	if is_showing_overlay() and _handle_leaderboard_pointer(event):
 		return true
+
+	if (leaderboard_open or phase == Phase.LEADERBOARD) and not is_capturing_input():
+		if _key_pressed(event, KEY_LEFT):
+			_set_leaderboard_page(leaderboard_page - 1)
+			return true
+		if _key_pressed(event, KEY_RIGHT):
+			_set_leaderboard_page(leaderboard_page + 1)
+			return true
 
 	if _key_pressed(event, KEY_L) and not is_capturing_input():
 		if leaderboard_open or phase == Phase.LEADERBOARD:
@@ -340,6 +380,11 @@ func _handle_leaderboard_pointer(event: InputEvent) -> bool:
 	if _tab_mobile_rect.has_point(point):
 		_set_view_mode(HighscoreConfig.MODE_ID_MOBILE)
 		return true
+	for page_target in _page_hit_targets:
+		var page_rect: Rect2 = page_target.rect
+		if page_rect.has_point(point):
+			_set_leaderboard_page(int(page_target.page))
+			return true
 	if _lb_close_rect.size.x > 0.0 and _lb_close_rect.has_point(point):
 		leaderboard_open = false
 		if _is_game_over_context():
@@ -375,6 +420,7 @@ func _set_view_mode(mode_id: String) -> void:
 		return
 	view_mode_id = mode_id
 	entries.clear()
+	leaderboard_page = 0
 	status_text = ""
 	_fetch_leaderboard()
 	queue_redraw()
@@ -606,9 +652,13 @@ func _draw_leaderboard_panel(vp: Vector2) -> void:
 		_draw_centered(_body_font, Vector2(panel.get_center().x, y), status_text, body_size, Color("fb7185"))
 		y += 24.0 * ui_scale
 
-	var row_limit := panel.end.y - 28.0 * ui_scale
+	var pager_h := 0.0
+	if _leaderboard_page_count() > 1:
+		pager_h = 34.0 * ui_scale
+	var row_limit := panel.end.y - 28.0 * ui_scale - pager_h
 	if _lb_close_rect.size.x > 0.0:
-		row_limit = _lb_close_rect.position.y - 8.0
+		row_limit = _lb_close_rect.position.y - 8.0 - pager_h
+	_page_hit_targets.clear()
 	if entries.is_empty() and status_text.is_empty():
 		_draw_centered(
 			_body_font,
@@ -636,7 +686,7 @@ func _draw_leaderboard_panel(vp: Vector2) -> void:
 			true
 		)
 		_play_hit_targets.clear()
-		for entry in entries:
+		for entry in _page_entries():
 			if y > row_limit:
 				break
 			var rank: int = int(entry.get("rank", 0))
@@ -676,6 +726,8 @@ func _draw_leaderboard_panel(vp: Vector2) -> void:
 				_play_hit_targets.append({"rect": play_rect, "checksum": checksum})
 			y += row_h
 
+	_draw_leaderboard_pager(panel, ui_scale, hint_size)
+
 	if touch_ui:
 		if _lb_close_rect.size.x > 0.0:
 			_draw_choice(_lb_close_rect, "CLOSE", false)
@@ -684,7 +736,9 @@ func _draw_leaderboard_panel(vp: Vector2) -> void:
 	else:
 		var footer := "R / Space / Enter restart"
 		if not _is_game_over_context():
-			footer = "L close"
+			footer = "L close · Left/Right page"
+		else:
+			footer = "R / Space / Enter restart · Left/Right page"
 		_draw_centered(
 			_body_font,
 			Vector2(panel.get_center().x, panel.end.y - 16.0 * ui_scale),
@@ -692,6 +746,28 @@ func _draw_leaderboard_panel(vp: Vector2) -> void:
 			hint_size,
 			Color("6a8799")
 		)
+
+
+func _draw_leaderboard_pager(panel: Rect2, ui_scale: float, hint_size: int) -> void:
+	_page_hit_targets.clear()
+	var page_count := _leaderboard_page_count()
+	if page_count <= 1:
+		return
+	var btn_h := maxf(26.0, 28.0 * ui_scale)
+	var btn_w := maxf(28.0, 30.0 * ui_scale)
+	var gap := 6.0 * ui_scale
+	var total_w := float(page_count) * btn_w + float(page_count - 1) * gap
+	var x := panel.get_center().x - total_w * 0.5
+	var y := panel.end.y - 16.0 * ui_scale - btn_h
+	if _lb_close_rect.size.x > 0.0:
+		y = _lb_close_rect.position.y - 8.0 - btn_h
+	elif not PlayDevice.is_touch_primary():
+		y = panel.end.y - 36.0 * ui_scale - btn_h
+	for page_i in page_count:
+		var rect := Rect2(x, y, btn_w, btn_h)
+		_draw_choice(rect, str(page_i + 1), page_i == leaderboard_page, hint_size)
+		_page_hit_targets.append({"rect": rect, "page": page_i})
+		x += btn_w + gap
 
 
 func _draw_centered(font: Font, center: Vector2, text: String, size: int, color: Color) -> void:
@@ -937,10 +1013,14 @@ func _on_request_completed(
 				entries = []
 			if status_text == "Submitting..." or status_text == "Uploading replay..." or status_text == "Loading replay...":
 				status_text = ""
+			if submitted_rank > 0 and view_mode_id == submit_mode_id:
+				leaderboard_page = int(float(submitted_rank - 1) / float(HighscoreConfig.LEADERBOARD_PAGE_SIZE))
+			_clamp_leaderboard_page()
 		else:
 			entries = []
 			if status_text.is_empty():
 				status_text = "Scores unavailable"
+			_clamp_leaderboard_page()
 		queue_redraw()
 		return
 
@@ -1069,11 +1149,19 @@ func _layout_leaderboard(vp: Vector2) -> Rect2:
 		panel_w = minf(maxf(640.0 * ui_scale, 320.0), vp.x - 12.0)
 	var row_h := 28.0 * ui_scale
 	var header_h := 22.0 * ui_scale
-	var rows := maxi(1, entries.size())
+	var rows := clampi(entries.size(), 1, HighscoreConfig.LEADERBOARD_PAGE_SIZE)
+	var page_count := _leaderboard_page_count()
+	var pager_h := 40.0 * ui_scale if page_count > 1 else 0.0
 	var tab_h := maxf(36.0, 32.0 * ui_scale)
 	var action_h := 56.0 if touch_ui else 0.0
 	var panel_h := minf(
-		100.0 * ui_scale + tab_h + action_h + header_h + float(rows) * row_h + 48.0 * ui_scale,
+		100.0 * ui_scale
+		+ tab_h
+		+ action_h
+		+ header_h
+		+ float(rows) * row_h
+		+ pager_h
+		+ 48.0 * ui_scale,
 		vp.y - 16.0
 	)
 	var panel_y := (vp.y - panel_h) * 0.5

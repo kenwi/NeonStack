@@ -25,7 +25,7 @@ const HOLD_ACTIONS := {
 const TAP_ACTIONS := ["rot", "ccw", "drop", "hold"]
 const UTILITY := ["pause", "help", "scores", "restart", "mute", "full", "zones", "scale_down", "scale_up"]
 ## Kept on its own row under the crowded utility strip.
-const UTILITY_BELOW := ["next", "juice"]
+const UTILITY_BELOW := ["next", "juice", "bg"]
 const LABELS := {
 	"left": "<",
 	"right": ">",
@@ -43,6 +43,7 @@ const LABELS := {
 	"zones": "ZONES",
 	"next": "NEXT TRACK",
 	"juice": "JUICE",
+	"bg": "BG",
 }
 
 var _font: Font
@@ -270,6 +271,10 @@ func _on_press(id: String) -> void:
 	elif id == "juice":
 		if main.has_method("toggle_juice"):
 			main.toggle_juice()
+		queue_redraw()
+	elif id == "bg":
+		if main.has_method("cycle_backdrop"):
+			main.cycle_backdrop()
 		queue_redraw()
 	elif id == "full":
 		main._toggle_fullscreen()
@@ -557,6 +562,8 @@ func _draw() -> void:
 			held = true
 		elif id == "juice" and main.juice != null and main.juice.is_enabled():
 			held = true
+		elif id == "bg" and int(main.backdrop_mode) == 2:
+			held = true
 		elif id == "scale_down" and _scale == SCALE_MIN:
 			held = true
 		elif id == "scale_up" and _scale == SCALE_MAX:
@@ -617,6 +624,17 @@ func _button_label(id: String, paused: bool) -> String:
 		var main := get_parent()
 		var on: bool = main != null and main.juice != null and main.juice.is_enabled()
 		return "JUICE ON" if on else "JUICE OFF"
+	if id == "bg":
+		var main_bg := get_parent()
+		if main_bg != null and main_bg.has_method("_backdrop_mode_label"):
+			match int(main_bg.backdrop_mode):
+				0:
+					return "BG DIM"
+				1:
+					return "BG LIT"
+				_:
+					return "BG GRID"
+		return "BG"
 	if id == "scale_down":
 		return "%dx" % (maxi(SCALE_MIN, _scale - 1) if _scale > SCALE_MIN else _scale)
 	if id == "scale_up":
