@@ -710,13 +710,6 @@ func _draw_leaderboard_panel(vp: Vector2) -> void:
 		_draw_leaderboard_col("LINES CLEARED", cols.lines_x, y, cols.lines_w, header_size, header_color, true)
 		_draw_leaderboard_col("TIME", cols.time_x, y, cols.time_w, header_size, header_color, true)
 		y += 22.0 * ui_scale
-		draw_line(
-			Vector2(panel.position.x + 14.0 * ui_scale, y - 8.0 * ui_scale),
-			Vector2(panel.end.x - 14.0 * ui_scale, y - 8.0 * ui_scale),
-			ColorTheme.accent(0.25),
-			1.0,
-			true
-		)
 		_play_hit_targets.clear()
 		for entry in _page_entries():
 			if y > row_limit:
