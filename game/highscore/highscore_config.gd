@@ -17,7 +17,7 @@ const GREETINGS_ENABLED_KEY := "enabled"
 
 ## Space thousand separators: 10000 -> "10 000".
 static func format_score(value: int) -> String:
-	var sign := "-" if value < 0 else ""
+	var prefix := "-" if value < 0 else ""
 	var digits := str(absi(value))
 	var out := ""
 	var count := 0
@@ -26,4 +26,4 @@ static func format_score(value: int) -> String:
 			out = " " + out
 		out = digits.substr(i, 1) + out
 		count += 1
-	return sign + out
+	return prefix + out
