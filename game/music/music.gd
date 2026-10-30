@@ -2,20 +2,19 @@ extends Node2D
 
 ## Playlist, mute, and volume for the in-game soundtrack.
 ## Track order is shuffled from the current time, then shuffled again after each full pass.
+## Streams load in the background so skip / first play do not freeze the board.
 
-const TRACK_FELL: AudioStreamMP3 = preload("res://game/music/happy_on_the_way_we_fell.mp3")
-const TRACK_STACK: AudioStreamMP3 = preload("res://game/music/neon_stack.mp3")
-const TRACK_TETRIS: AudioStreamMP3 = preload("res://game/music/neon_tetris.mp3")
+const TRACK_PATHS: Array[Dictionary] = [
+	{"title": "Happy on the Way We Fell", "path": "res://game/music/happy_on_the_way_we_fell.mp3"},
+	{"title": "Neon Stack", "path": "res://game/music/neon_stack.mp3"},
+	{"title": "Neon Tetris", "path": "res://game/music/neon_tetris.mp3"},
+]
 const VOLUME_STEPS := 10
 const DEFAULT_STEP := 7
 const STATUS_TIME := 1.8
 const STATUS_FADE := 0.35
 
-var _tracks: Array[Dictionary] = [
-	{"title": "Happy on the Way We Fell", "stream": TRACK_FELL},
-	{"title": "Neon Stack", "stream": TRACK_STACK},
-	{"title": "Neon Tetris", "stream": TRACK_TETRIS},
-]
+var _tracks: Array[Dictionary] = []
 var _player := AudioStreamPlayer.new()
 var _rng := RandomNumberGenerator.new()
 var _index := 0
@@ -26,14 +25,23 @@ var _play_started_msec := 0
 var _status := ""
 var _status_timer := 0.0
 var _font: Font
+## path -> AudioStreamMP3
+var _stream_cache: Dictionary = {}
+## path currently requested via ResourceLoader
+var _loading: Dictionary = {}
+## When set, play this playlist index as soon as its stream is cached.
+var _pending_index := -1
+var _pending_announce := false
+var _load_generation := 0
 
 
 func _ready() -> void:
 	_font = ThemeDB.fallback_font
 	_player.finished.connect(_on_finished)
 	add_child(_player)
+	_tracks = TRACK_PATHS.duplicate(true)
 	_shuffle_tracks()
-	_play(0, true)
+	_request_play(0, true)
 
 
 func handle_input(event: InputEvent) -> bool:
@@ -91,18 +99,19 @@ func _skip() -> void:
 
 
 func _advance() -> void:
-	var next := _index + 1
+	var from := _pending_index if _pending_index >= 0 else _index
+	var next := from + 1
 	if next < _tracks.size():
-		_play(next, true)
+		_request_play(next, true)
 		return
-	var finished: Dictionary = _tracks[_index]
+	var finished_path := _track_path(from)
 	_shuffle_tracks()
-	if _tracks.size() > 1 and _tracks[0] == finished:
+	if _tracks.size() > 1 and _track_path(0) == finished_path:
 		var swap := _rng.randi_range(1, _tracks.size() - 1)
 		var first: Dictionary = _tracks[0]
 		_tracks[0] = _tracks[swap]
 		_tracks[swap] = first
-	_play(0, true)
+	_request_play(0, true)
 
 
 func _shuffle_tracks() -> void:
@@ -131,9 +140,98 @@ func _time_seed() -> int:
 	return hash(mixed)
 
 
-func _play(index: int, announce: bool) -> void:
+func _track_path(index: int) -> String:
+	return str(_tracks[index]["path"])
+
+
+func _track_title(index: int) -> String:
+	return str(_tracks[index]["title"])
+
+
+func _request_play(index: int, announce: bool) -> void:
+	if index < 0 or index >= _tracks.size():
+		return
+	_pending_index = index
+	_pending_announce = announce
+	var path := _track_path(index)
+	if _stream_cache.has(path):
+		_commit_play(index, announce)
+		return
+	if announce:
+		_show("Loading: %s" % _track_title(index))
+	_ensure_loading(path)
+
+
+func _ensure_loading(path: String) -> void:
+	if path.is_empty() or _stream_cache.has(path) or _loading.has(path):
+		return
+	_loading[path] = true
+	var err := ResourceLoader.load_threaded_request(path, "AudioStreamMP3", false)
+	if err != OK:
+		# Request failed (already in progress, etc). Fall back without blocking this frame.
+		_loading.erase(path)
+		_load_generation += 1
+		var gen := _load_generation
+		_load_stream_deferred(path, gen)
+
+
+func _load_stream_deferred(path: String, gen: int) -> void:
+	await get_tree().process_frame
+	if gen != _load_generation:
+		return
+	if _stream_cache.has(path):
+		_on_stream_ready(path)
+		return
+	# Last resort on platforms where threaded load cannot start. Still yield a frame
+	# so the current input / physics step finishes before the hitch.
+	var stream := ResourceLoader.load(path, "AudioStreamMP3", ResourceLoader.CACHE_MODE_REUSE)
+	if stream is AudioStreamMP3:
+		_stream_cache[path] = stream
+		_on_stream_ready(path)
+	else:
+		push_warning("Soundtrack failed to load: %s" % path)
+		if _pending_index >= 0 and _track_path(_pending_index) == path:
+			_pending_index = -1
+
+
+func _poll_loads() -> void:
+	if _loading.is_empty():
+		return
+	var finished: Array[String] = []
+	for path in _loading.keys():
+		var status := ResourceLoader.load_threaded_get_status(str(path))
+		if status == ResourceLoader.THREAD_LOAD_IN_PROGRESS:
+			continue
+		finished.append(str(path))
+		if status != ResourceLoader.THREAD_LOAD_LOADED:
+			push_warning("Soundtrack failed to load: %s" % path)
+			if _pending_index >= 0 and _track_path(_pending_index) == str(path):
+				_pending_index = -1
+			continue
+		var stream := ResourceLoader.load_threaded_get(str(path))
+		if stream is AudioStreamMP3:
+			_stream_cache[str(path)] = stream
+			_on_stream_ready(str(path))
+		else:
+			push_warning("Soundtrack has unexpected type: %s" % path)
+	for path in finished:
+		_loading.erase(path)
+
+
+func _on_stream_ready(path: String) -> void:
+	if _pending_index >= 0 and _track_path(_pending_index) == path:
+		var index := _pending_index
+		var announce := _pending_announce
+		_commit_play(index, announce)
+
+
+func _commit_play(index: int, announce: bool) -> void:
+	var path := _track_path(index)
+	if not _stream_cache.has(path):
+		return
+	_pending_index = -1
 	_index = index
-	var stream := _tracks[_index]["stream"] as AudioStreamMP3
+	var stream: AudioStreamMP3 = _stream_cache[path]
 	stream.loop = false
 	_switching = true
 	if _player.playing:
@@ -144,7 +242,17 @@ func _play(index: int, announce: bool) -> void:
 	_play_started_msec = Time.get_ticks_msec()
 	_player.play()
 	if announce:
-		_show("Now playing: %s" % str(_tracks[_index]["title"]))
+		_show("Now playing: %s" % _track_title(index))
+	_prefetch_next()
+
+
+func _prefetch_next() -> void:
+	if _tracks.is_empty():
+		return
+	var next := _index + 1
+	if next >= _tracks.size():
+		next = 0
+	_ensure_loading(_track_path(next))
 
 
 func _on_finished() -> void:
@@ -152,7 +260,7 @@ func _on_finished() -> void:
 		return
 	# A failed stream can end on the same frame it starts. Don't spin the playlist.
 	if Time.get_ticks_msec() - _play_started_msec < 400:
-		push_warning("Soundtrack ended immediately: %s" % str(_tracks[_index]["title"]))
+		push_warning("Soundtrack ended immediately: %s" % _track_title(_index))
 		return
 	_advance()
 
@@ -181,6 +289,7 @@ func _show(text: String) -> void:
 
 
 func _process(delta: float) -> void:
+	_poll_loads()
 	if _status_timer <= 0.0:
 		return
 	_status_timer = maxf(0.0, _status_timer - delta)
