@@ -619,7 +619,7 @@ func _handle_touch_overlay(event: InputEvent) -> bool:
 		help_open = false
 		score_open = false
 		if touch != null:
-			touch.suppress_play_taps(280)
+			touch.suppress_play_taps()
 		queue_redraw()
 		return true
 	if _touch_restart_rect.size.x > 0.0 and _touch_restart_rect.has_point(point):
@@ -628,7 +628,7 @@ func _handle_touch_overlay(event: InputEvent) -> bool:
 	if help_open or score_open:
 		# Eat taps on the dimmed panel so they cannot fall through to play.
 		if touch != null:
-			touch.suppress_play_taps(280)
+			touch.suppress_play_taps()
 		help_open = false
 		score_open = false
 		queue_redraw()

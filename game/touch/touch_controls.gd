@@ -50,6 +50,9 @@ var _rects: Dictionary = {}
 var _scale := SCALE_DEFAULT
 var _show_zones := false
 var _suppress_play_until_msec := 0
+## After any menu closes, ignore quadrant taps until that gesture fully ends.
+var _zones_locked := false
+var _overlay_blocked := true
 var _metric_key := ""
 var _metric: Dictionary = {}
 
@@ -81,16 +84,18 @@ func toast_bottom_inset() -> float:
 	return band_height(get_viewport_rect().size.x) + 12.0
 
 
-func suppress_play_taps(duration_msec: int = 280) -> void:
+func suppress_play_taps(duration_msec: int = 450) -> void:
 	# After closing an overlay, the same finger (or a ghost mouse click) must not
 	# land in a quadrant and hard-drop the piece.
 	_suppress_play_until_msec = maxi(
 		_suppress_play_until_msec,
 		Time.get_ticks_msec() + maxi(0, duration_msec)
 	)
+	_zones_locked = true
 
 
 func handle_input(event: InputEvent) -> bool:
+	_sync_overlay_block()
 	if not _controls_visible():
 		_release_all()
 		return false
@@ -98,6 +103,13 @@ func handle_input(event: InputEvent) -> bool:
 		var touch_event := event as InputEventScreenTouch
 		if touch_event.pressed:
 			return _begin_finger(touch_event.index, touch_event.position)
+		# Lift after dismissing a menu may never have called begin_finger.
+		if not _fingers.has(touch_event.index):
+			if _zones_locked:
+				# That closing gesture ended; time suppress still covers ghost clicks.
+				_zones_locked = false
+				return true
+			return false
 		return _end_finger(touch_event.index)
 	if event is InputEventScreenDrag:
 		var drag_event := event as InputEventScreenDrag
@@ -109,6 +121,7 @@ func handle_input(event: InputEvent) -> bool:
 
 
 func _process(_delta: float) -> void:
+	_sync_overlay_block()
 	if not _controls_visible():
 		_release_all()
 	queue_redraw()
@@ -117,21 +130,33 @@ func _process(_delta: float) -> void:
 func _controls_visible() -> bool:
 	if not PlayDevice.is_touch_primary():
 		return false
+	return not _is_overlay_blocking()
+
+
+func _is_overlay_blocking() -> bool:
 	var main := get_parent()
 	if main == null:
-		return false
+		return true
 	if main.help_open or main.score_open or main.game_over:
-		return false
+		return true
 	if main.highscores != null and main.highscores.is_showing_overlay():
-		return false
-	return true
+		return true
+	return false
+
+
+func _sync_overlay_block() -> void:
+	var blocked := _is_overlay_blocking()
+	if _overlay_blocked and not blocked:
+		# Menu just closed - lock zones until this gesture ends.
+		suppress_play_taps(450)
+	_overlay_blocked = blocked
 
 
 func _begin_finger(index: int, pos: Vector2) -> bool:
 	_rebuild_rects()
 	var id := _hit(pos)
 	if id == "":
-		if _play_taps_suppressed():
+		if _zones_blocked():
 			_fingers[index] = ""
 			return true
 		if _tap_quadrant(pos):
@@ -145,7 +170,7 @@ func _begin_finger(index: int, pos: Vector2) -> bool:
 		_fingers[index] = ""
 		queue_redraw()
 		return true
-	if _play_taps_suppressed() and _is_gameplay(id):
+	if _zones_blocked() and _is_gameplay(id):
 		_fingers[index] = ""
 		return true
 	_fingers[index] = id
@@ -154,8 +179,16 @@ func _begin_finger(index: int, pos: Vector2) -> bool:
 	return true
 
 
-func _play_taps_suppressed() -> bool:
-	return Time.get_ticks_msec() < _suppress_play_until_msec
+func _zones_blocked() -> bool:
+	return _zones_locked or Time.get_ticks_msec() < _suppress_play_until_msec
+
+
+func _clear_zone_lock_if_idle() -> void:
+	if not _fingers.is_empty():
+		return
+	if Time.get_ticks_msec() < _suppress_play_until_msec:
+		return
+	_zones_locked = false
 
 
 func _end_finger(index: int) -> bool:
@@ -165,6 +198,7 @@ func _end_finger(index: int) -> bool:
 	_fingers.erase(index)
 	if HOLD_ACTIONS.has(id):
 		_set_hold(str(HOLD_ACTIONS[id]), false)
+	_clear_zone_lock_if_idle()
 	queue_redraw()
 	return true
 

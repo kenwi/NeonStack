@@ -151,6 +151,7 @@ func close_overlay() -> void:
 	leaderboard_open = false
 	if not _is_game_over_context():
 		phase = Phase.IDLE
+	_suppress_touch_zones()
 	queue_redraw()
 
 
@@ -277,12 +278,22 @@ func _handle_leaderboard_pointer(event: InputEvent) -> bool:
 			phase = Phase.IDLE
 		elif phase == Phase.LEADERBOARD:
 			phase = Phase.IDLE
+		_suppress_touch_zones()
 		queue_redraw()
 		return true
 	if _lb_restart_rect.size.x > 0.0 and _lb_restart_rect.has_point(point):
 		get_parent()._new_game()
 		return true
 	return false
+
+
+func _suppress_touch_zones() -> void:
+	var main := get_parent()
+	if main == null:
+		return
+	var touch = main.get_node_or_null("TouchControls")
+	if touch != null:
+		touch.suppress_play_taps()
 
 
 func _set_view_mode(mode_id: String) -> void:
