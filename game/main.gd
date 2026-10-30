@@ -596,15 +596,6 @@ func _check_leaderboard_greetings() -> void:
 	_rank_announced = rank
 
 
-func _debug_leaderboard_greeting(kind: int) -> void:
-	if juice == null:
-		return
-	if kind == 1:
-		juice.announce_rank(10, _board_center())
-	elif kind == 2:
-		juice.announce_new_record(_board_center())
-
-
 func _toggle_leaderboard_greetings() -> void:
 	leaderboard_greetings = not leaderboard_greetings
 	_save_leaderboard_greetings()
@@ -1145,14 +1136,6 @@ func _input(event: InputEvent) -> void:
 		return
 	if _key_pressed(event, KEY_G):
 		_toggle_leaderboard_greetings()
-		get_viewport().set_input_as_handled()
-		return
-	if _key_pressed(event, KEY_1) or _key_pressed(event, KEY_KP_1):
-		_debug_leaderboard_greeting(1)
-		get_viewport().set_input_as_handled()
-		return
-	if _key_pressed(event, KEY_2) or _key_pressed(event, KEY_KP_2):
-		_debug_leaderboard_greeting(2)
 		get_viewport().set_input_as_handled()
 		return
 	if _key_pressed(event, KEY_Q):
