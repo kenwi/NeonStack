@@ -76,7 +76,6 @@ public static partial class ScoreSanitizer
         LinesCleared = submission.LinesCleared,
         Level = submission.Level,
         ElapsedSeconds = submission.ElapsedSeconds,
-        Checksum = submission.Checksum,
-        Replay = submission.Replay
+        Checksum = submission.Checksum
     };
 }

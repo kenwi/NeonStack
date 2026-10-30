@@ -5,17 +5,14 @@ using Tetris.Highscores.Shared;
 namespace Tetris.Highscores.Server;
 
 /// <summary>Outcome of a score submission. Rank is 1-based within the mode's leaderboard.</summary>
-public sealed record ScoreAddResult(bool Accepted, int Rank, int TotalEntriesForMode, string? Error = null)
+public sealed record ScoreAddResult(bool Accepted, int Rank, int TotalEntriesForMode)
 {
-    public static readonly ScoreAddResult Duplicate = new(false, 0, 0, "duplicate");
-
-    public static ScoreAddResult Failed(string error) => new(false, 0, 0, error);
+    public static readonly ScoreAddResult Duplicate = new(false, 0, 0);
 }
 
 public sealed class JsonFileScoreStore
 {
     public const int MaxReplayBytes = 1_048_576;
-    public const int TopReplayRequiredRank = 10;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -80,63 +77,22 @@ public sealed class JsonFileScoreStore
                 Checksum = checksum,
                 HasReplay = false
             };
+            entries.Add(newEntry);
 
             var rank = entries
-                .Append(newEntry)
                 .OrderByDescending(e => e.FinalScore)
                 .ThenBy(e => e.ElapsedSeconds)
                 .ThenBy(e => e.SubmittedAt)
                 .ToList()
                 .FindIndex(e => ReferenceEquals(e, newEntry)) + 1;
 
-            var hasReplayPayload = submission.Replay.ValueKind == JsonValueKind.Object;
-            if (rank <= TopReplayRequiredRank)
-            {
-                if (!hasReplayPayload)
-                {
-                    _logger.LogWarning(
-                        "Score rejected (top {Top} requires replay): ModeId={ModeId}, PlayerName={PlayerName}, " +
-                        "FinalScore={FinalScore}, ProjectedRank={ProjectedRank}",
-                        TopReplayRequiredRank,
-                        submission.ModeId,
-                        submission.PlayerName,
-                        submission.FinalScore,
-                        rank);
-                    return ScoreAddResult.Failed("Replay is required for top 10 scores.");
-                }
-
-                var replayJson = submission.Replay.GetRawText();
-                var byteCount = System.Text.Encoding.UTF8.GetByteCount(replayJson);
-                if (byteCount > MaxReplayBytes)
-                    return ScoreAddResult.Failed("Replay exceeds size limit.");
-
-                if (!TryValidateReplaySchema(replayJson, out var schemaError))
-                    return ScoreAddResult.Failed(schemaError);
-
-                if (!TryMatchReplayOutcome(replayJson, newEntry, out var outcomeError))
-                    return ScoreAddResult.Failed(outcomeError);
-
-                Directory.CreateDirectory(_replayDir);
-                await File.WriteAllTextAsync(ReplayPath(checksum), replayJson, cancellationToken);
-                newEntry.HasReplay = true;
-                _logger.LogInformation(
-                    "Top-rank replay attached on submit: Checksum={Checksum}, ModeId={ModeId}, Rank={Rank}, Bytes={Bytes}",
-                    checksum,
-                    submission.ModeId,
-                    rank,
-                    byteCount);
-            }
-
-            entries.Add(newEntry);
-
             _logger.LogInformation(
                 "Score persisted: ModeId={ModeId}, PlayerName={PlayerName}, FinalScore={FinalScore}, " +
-                "Rank={Rank}, HasReplay={HasReplay}, ModeEntryCount={ModeEntryCount}, FilePath={FilePath}",
+                "Rank={Rank}, ModeEntryCount={ModeEntryCount}, FilePath={FilePath}",
                 submission.ModeId,
                 submission.PlayerName,
                 submission.FinalScore,
                 rank,
-                newEntry.HasReplay,
                 entries.Count,
                 _filePath);
 

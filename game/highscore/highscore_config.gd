@@ -7,8 +7,6 @@ const MODE_ID_MOBILE := "classic-mobile"
 const DEFAULT_TOP_COUNT := 100
 const LEADERBOARD_PAGE_SIZE := 20
 const LIVE_RANK_TOP_COUNT := 10
-## New scores that would place in ranks 1..N must include a replay on submit.
-const TOP_REPLAY_REQUIRED_RANK := 10
 const MAX_PLAYER_NAME_LENGTH := 16
 const PLAYER_NAME_PATH := "user://highscore.cfg"
 const PLAYER_NAME_SECTION := "player"

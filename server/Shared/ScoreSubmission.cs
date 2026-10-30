@@ -1,5 +1,3 @@
-using System.Text.Json;
-
 namespace Tetris.Highscores.Shared;
 
 /// <summary>Payload sent to the highscore API when a run is submitted.</summary>
@@ -12,6 +10,4 @@ public sealed class ScoreSubmission
     public int Level { get; set; }
     public float ElapsedSeconds { get; set; }
     public string Checksum { get; set; } = string.Empty;
-    /// <summary>Optional replay object. Required when the score would enter the top 10.</summary>
-    public JsonElement Replay { get; set; }
 }
