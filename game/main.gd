@@ -42,6 +42,7 @@ const HELP_KEYS := [
 	["R", "Restart"],
 	["L", "Highscores"],
 	["F / F11", "Fullscreen"],
+	["J", "Toggle juice FX"],
 	["Q", "Quit"],
 	["H", "Toggle this help"],
 	["S", "Score table"],
@@ -60,6 +61,7 @@ const HELP_TOUCH := [
 	["1x / 3x", "Button size"],
 	["Zones", "Show tap zones"],
 	["Full", "Fullscreen"],
+	["Juice", "Toggle juice FX"],
 	["Pause", "Pause"],
 	["Restart", "Restart"],
 	["Scores", "Highscores"],
@@ -177,6 +179,7 @@ var body_font: Font
 # The scene already owns these nodes. Preloading scripts from here cycles the load.
 @onready var music = $Music
 @onready var highscores = $Highscores
+@onready var juice = $Juice
 @onready var touch = $TouchControls
 
 var _touch_close_rect := Rect2()
@@ -320,6 +323,8 @@ func _new_game() -> void:
 	move_held = 0
 	if highscores != null:
 		highscores.reset_run()
+	if juice != null:
+		juice.reset_run()
 	_spawn_next()
 	queue_redraw()
 
@@ -415,22 +420,31 @@ func _grounded() -> bool:
 func _hard_drop() -> void:
 	if clear_timer > 0.0 or game_over or paused:
 		return
+	var from_cells: Array = _cells(piece_id, piece_rot, piece_pos)
 	var dist := 0
 	while _try_move(0, 1):
 		dist += 1
 	score += dist * 2
+	if juice != null and dist > 0:
+		var col: Color = COLORS[piece_id]
+		juice.hard_drop(from_cells, _cells(piece_id, piece_rot, piece_pos), col, board_origin, cell_size)
+		juice.note_score(score, _board_center())
 	_lock_piece()
 
 
 func _lock_piece() -> void:
 	if clear_timer > 0.0:
 		return
-	for c in _cells(piece_id, piece_rot, piece_pos):
+	var locked_cells: Array = _cells(piece_id, piece_rot, piece_pos)
+	var lock_color: Color = COLORS[piece_id] if COLORS.has(piece_id) else Color("8ef7ff")
+	for c in locked_cells:
 		if c.y < 0:
 			_set_game_over()
 			queue_redraw()
 			return
 		board[c.y][c.x] = piece_id
+	if juice != null:
+		juice.lock_impact(locked_cells, lock_color, board_origin, cell_size)
 	_begin_line_clear()
 
 
@@ -445,8 +459,12 @@ func _begin_line_clear() -> void:
 		if full:
 			clear_flash.append(y)
 	if clear_flash.is_empty():
+		if juice != null:
+			juice.note_no_clear()
 		_spawn_next()
 	else:
+		if juice != null:
+			juice.line_clear_begin(clear_flash, board, COLORS, board_origin, cell_size)
 		clear_timer = 0.28
 	queue_redraw()
 
@@ -468,9 +486,23 @@ func _finish_line_clear() -> void:
 	clear_flash.clear()
 	clear_timer = 0.0
 	lines_cleared += cleared
-	score += SCORE_TABLE[cleared] * level
+	var points: int = int(SCORE_TABLE[cleared]) * level
+	score += points
+	var previous_level := level
 	level = mini(15, 1 + int(lines_cleared / 10.0))
+	if juice != null:
+		juice.line_clear_scored(cleared, points, _board_center())
+		juice.note_score(score, _board_center())
+		if level > previous_level:
+			juice.level_up(level, _board_center())
 	_spawn_next()
+	queue_redraw()
+
+
+func toggle_juice() -> void:
+	if juice == null:
+		return
+	juice.toggle()
 	queue_redraw()
 
 
@@ -511,6 +543,8 @@ func _highscores_open() -> bool:
 
 func _process(delta: float) -> void:
 	pulse += delta
+	if juice != null:
+		juice.tick(delta)
 	if game_over or paused or help_open or score_open or _highscores_open():
 		queue_redraw()
 		return
@@ -527,6 +561,8 @@ func _process(delta: float) -> void:
 		if soft_timer <= 0.0:
 			if _try_move(0, 1):
 				score += 1
+				if juice != null:
+					juice.note_score(score, _board_center())
 			soft_timer = 0.035
 	else:
 		soft_timer = 0.0
@@ -625,7 +661,7 @@ func _handle_touch_overlay(event: InputEvent) -> bool:
 	if _touch_restart_rect.size.x > 0.0 and _touch_restart_rect.has_point(point):
 		_new_game()
 		return true
-	if help_open or score_open:
+	if PlayDevice.is_touch_primary() and (help_open or score_open):
 		# Eat taps on the dimmed panel so they cannot fall through to play.
 		if touch != null:
 			touch.suppress_play_taps()
@@ -678,6 +714,10 @@ func _input(event: InputEvent) -> void:
 		return
 	if _key_pressed(event, KEY_F) or _key_pressed(event, KEY_F11):
 		_toggle_fullscreen()
+		get_viewport().set_input_as_handled()
+		return
+	if _key_pressed(event, KEY_J):
+		toggle_juice()
 		get_viewport().set_input_as_handled()
 		return
 	if _key_pressed(event, KEY_Q):
@@ -751,6 +791,8 @@ func _draw() -> void:
 	_draw_backdrop(vp)
 	_draw_board_frame()
 	_draw_board_cells()
+	if juice != null:
+		juice.draw_fx(self)
 	if not game_over and clear_timer <= 0.0:
 		_draw_ghost()
 		_draw_active()
@@ -801,10 +843,13 @@ func _draw_board_cells() -> void:
 
 func _draw_active() -> void:
 	var col: Color = COLORS[piece_id]
+	var scale_mul := 1.0
+	if juice != null:
+		scale_mul = juice.active_pulse_scale(_grounded(), lock_timer, 0.5)
 	for c in _cells(piece_id, piece_rot, piece_pos):
 		if c.y < 0:
 			continue
-		_draw_block(c, col, 1.0)
+		_draw_block(c, col, scale_mul)
 
 
 func _draw_ghost() -> void:
@@ -978,30 +1023,48 @@ func _draw_centered_label(center: Vector2, text: String, font: Font, size: int, 
 
 func _measure_info_table(vp: Vector2, title: String, rows: Array, footer: String) -> Dictionary:
 	var touch_ui := PlayDevice.is_touch_primary()
-	var left_w := 0.0
-	var right_w := 0.0
-	for row in rows:
-		left_w = maxf(left_w, body_font.get_string_size(str(row[0]), HORIZONTAL_ALIGNMENT_LEFT, -1, help_row_size).x)
-		right_w = maxf(right_w, body_font.get_string_size(str(row[1]), HORIZONTAL_ALIGNMENT_LEFT, -1, help_row_size).x)
+	var row_size := help_row_size
+	var title_size_local := help_title_size
 	var col_gap := 40.0 * ui_scale
 	var pad_x := 32.0 * ui_scale
 	var pad_top := 26.0 * ui_scale
 	var pad_bottom := 28.0 * ui_scale
-	var title_h := title_font.get_ascent(help_title_size) + title_font.get_descent(help_title_size)
-	var row_h := body_font.get_ascent(help_row_size) + body_font.get_descent(help_row_size) + 14.0 * ui_scale
 	var footer_h := 56.0 if touch_ui else body_font.get_ascent(hint_size) + body_font.get_descent(hint_size) + 10.0 * ui_scale
-	var content_w := left_w + col_gap + right_w
-	var title_w := title_font.get_string_size(title, HORIZONTAL_ALIGNMENT_LEFT, -1, help_title_size).x
-	var footer_w := 0.0 if touch_ui else body_font.get_string_size(footer, HORIZONTAL_ALIGNMENT_LEFT, -1, hint_size).x
-	var panel_w := maxf(pad_x * 2.0 + content_w, maxf(title_w, footer_w) + pad_x * 2.0)
-	if touch_ui:
-		panel_w = minf(panel_w, vp.x - 16.0)
-	var panel_h := pad_top + title_h + 18.0 * ui_scale + row_h * float(rows.size()) + footer_h + pad_bottom
+	var max_panel_h := maxf(160.0, vp.y - 16.0)
+	var left_w := 0.0
+	var right_w := 0.0
+	var title_h := 0.0
+	var row_h := 0.0
+	var title_w := 0.0
+	var footer_w := 0.0
+	var panel_w := 0.0
+	var panel_h := 0.0
+	# Shrink row typography until the panel fits short desktop windows.
+	while true:
+		left_w = 0.0
+		right_w = 0.0
+		for row in rows:
+			left_w = maxf(left_w, body_font.get_string_size(str(row[0]), HORIZONTAL_ALIGNMENT_LEFT, -1, row_size).x)
+			right_w = maxf(right_w, body_font.get_string_size(str(row[1]), HORIZONTAL_ALIGNMENT_LEFT, -1, row_size).x)
+		title_h = title_font.get_ascent(title_size_local) + title_font.get_descent(title_size_local)
+		row_h = body_font.get_ascent(row_size) + body_font.get_descent(row_size) + maxf(6.0, 14.0 * ui_scale * float(row_size) / float(help_row_size))
+		title_w = title_font.get_string_size(title, HORIZONTAL_ALIGNMENT_LEFT, -1, title_size_local).x
+		footer_w = 0.0 if touch_ui else body_font.get_string_size(footer, HORIZONTAL_ALIGNMENT_LEFT, -1, hint_size).x
+		var content_w := left_w + col_gap + right_w
+		panel_w = maxf(pad_x * 2.0 + content_w, maxf(title_w, footer_w) + pad_x * 2.0)
+		if touch_ui:
+			panel_w = minf(panel_w, vp.x - 16.0)
+		panel_h = pad_top + title_h + 18.0 * ui_scale + row_h * float(rows.size()) + footer_h + pad_bottom
+		if panel_h <= max_panel_h or row_size <= 12:
+			break
+		row_size -= 1
+		if title_size_local > 18 and row_size % 2 == 0:
+			title_size_local -= 1
+	panel_h = minf(panel_h, max_panel_h)
 	var center := _board_center()
 	var panel := Rect2(center - Vector2(panel_w, panel_h) * 0.5, Vector2(panel_w, panel_h))
-	if touch_ui:
-		panel.position.x = clampf(panel.position.x, 8.0, maxf(8.0, vp.x - panel.size.x - 8.0))
-		panel.position.y = clampf(panel.position.y, 8.0, maxf(8.0, vp.y - panel.size.y - 8.0))
+	panel.position.x = clampf(panel.position.x, 8.0, maxf(8.0, vp.x - panel.size.x - 8.0))
+	panel.position.y = clampf(panel.position.y, 8.0, maxf(8.0, vp.y - panel.size.y - 8.0))
 	var close := Rect2()
 	if touch_ui:
 		var button_w := minf(160.0, panel.size.x - 24.0)
@@ -1022,6 +1085,8 @@ func _measure_info_table(vp: Vector2, title: String, rows: Array, footer: String
 		"title_w": title_w,
 		"footer_w": footer_w,
 		"close": close,
+		"row_size": row_size,
+		"title_size": title_size_local,
 	}
 
 
@@ -1042,16 +1107,18 @@ func _draw_info_table(vp: Vector2, title: String, rows: Array, footer: String) -
 	var title_w: float = layout["title_w"]
 	var footer_w: float = layout["footer_w"]
 	var close: Rect2 = layout["close"]
+	var row_size: int = int(layout.get("row_size", help_row_size))
+	var title_size_local: int = int(layout.get("title_size", help_title_size))
 	_touch_close_rect = close
 	draw_rect(panel, Color("0b1a28", 0.96), true, -1.0, true)
 	draw_rect(panel, Color("8ef7ff", 0.45), false, 1.5, true)
 	draw_string(
 		title_font,
-		Vector2(panel.position.x + (panel_w - title_w) * 0.5, panel.position.y + pad_top + title_font.get_ascent(help_title_size)),
+		Vector2(panel.position.x + (panel_w - title_w) * 0.5, panel.position.y + pad_top + title_font.get_ascent(title_size_local)),
 		title,
 		HORIZONTAL_ALIGNMENT_LEFT,
 		-1,
-		help_title_size,
+		title_size_local,
 		Color("8ef7ff")
 	)
 	var divider_y := panel.position.y + pad_top + title_h + 10.0 * ui_scale
@@ -1064,24 +1131,27 @@ func _draw_info_table(vp: Vector2, title: String, rows: Array, footer: String) -
 	var table_w := left_w + col_gap + right_w
 	var left_x := panel.position.x + (panel_w - table_w) * 0.5
 	var right_x := left_x + left_w + col_gap
-	var row_y := divider_y + 8.0 * ui_scale + body_font.get_ascent(help_row_size)
+	var row_y := divider_y + 8.0 * ui_scale + body_font.get_ascent(row_size)
+	var row_limit_y := panel.end.y - footer_h
+	if close.size.x > 0.0:
+		row_limit_y = close.position.y - 8.0
 	for i in rows.size():
 		var row: Array = rows[i]
 		var left := str(row[0])
 		var right := str(row[1])
 		var y := row_y + i * row_h
-		if close.size.x > 0.0 and y > close.position.y - 8.0:
+		if y > row_limit_y:
 			break
 		if i % 2 == 1:
 			draw_rect(
-				Rect2(Vector2(panel.position.x + 10.0, y - body_font.get_ascent(help_row_size) - 4.0), Vector2(panel_w - 20.0, row_h - 2.0)),
+				Rect2(Vector2(panel.position.x + 10.0, y - body_font.get_ascent(row_size) - 4.0), Vector2(panel_w - 20.0, row_h - 2.0)),
 				Color("123047", 0.35),
 				true,
 				-1.0,
 				true
 			)
-		draw_string(body_font, Vector2(left_x, y), left, HORIZONTAL_ALIGNMENT_LEFT, -1, help_row_size, Color("8ef7ff"))
-		draw_string(body_font, Vector2(right_x, y), right, HORIZONTAL_ALIGNMENT_LEFT, -1, help_row_size, Color("e8f7ff"))
+		draw_string(body_font, Vector2(left_x, y), left, HORIZONTAL_ALIGNMENT_LEFT, -1, row_size, Color("8ef7ff"))
+		draw_string(body_font, Vector2(right_x, y), right, HORIZONTAL_ALIGNMENT_LEFT, -1, row_size, Color("e8f7ff"))
 	if close.size.x > 0.0:
 		_draw_overlay_button(close, "CLOSE")
 	else:
@@ -1117,7 +1187,7 @@ func _draw_overlay_button(rect: Rect2, label: String) -> void:
 func _sync_touch_overlay_rects() -> void:
 	_touch_close_rect = Rect2()
 	_touch_restart_rect = Rect2()
-	if not PlayDevice.is_touch_primary() or title_font == null or body_font == null:
+	if title_font == null or body_font == null:
 		return
 	var vp := get_viewport_rect().size
 	if help_open or score_open:
@@ -1125,7 +1195,7 @@ func _sync_touch_overlay_rects() -> void:
 		var rows: Array = _help_rows() if help_open else SCORE_HELP_ROWS
 		var layout := _measure_info_table(vp, title, rows, "")
 		_touch_close_rect = layout["close"]
-	elif game_over and not _highscores_open():
+	elif PlayDevice.is_touch_primary() and game_over and not _highscores_open():
 		var center := _board_center()
 		_touch_restart_rect = Rect2(center.x - 80.0, center.y + 24.0, 160.0, 48.0)
 

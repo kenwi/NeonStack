@@ -24,7 +24,7 @@ const HOLD_ACTIONS := {
 const TAP_ACTIONS := ["rot", "ccw", "drop", "hold"]
 const UTILITY := ["pause", "help", "scores", "restart", "mute", "full", "zones", "scale_down", "scale_up"]
 ## Kept on its own row under the crowded utility strip.
-const UTILITY_BELOW := ["next"]
+const UTILITY_BELOW := ["next", "juice"]
 const LABELS := {
 	"left": "<",
 	"right": ">",
@@ -41,6 +41,7 @@ const LABELS := {
 	"full": "FULL",
 	"zones": "ZONES",
 	"next": "NEXT TRACK",
+	"juice": "JUICE",
 }
 
 var _font: Font
@@ -260,6 +261,10 @@ func _on_press(id: String) -> void:
 		var music_next := main.get_node_or_null("Music")
 		if music_next != null:
 			music_next.skip_track()
+	elif id == "juice":
+		if main.has_method("toggle_juice"):
+			main.toggle_juice()
+		queue_redraw()
 	elif id == "full":
 		main._toggle_fullscreen()
 		queue_redraw()
@@ -522,6 +527,8 @@ func _draw() -> void:
 			held = true
 		elif id == "zones" and _show_zones:
 			held = true
+		elif id == "juice" and main.juice != null and main.juice.is_enabled():
+			held = true
 		elif id == "scale_down" and _scale == SCALE_MIN:
 			held = true
 		elif id == "scale_up" and _scale == SCALE_MAX:
@@ -578,6 +585,10 @@ func _button_label(id: String, paused: bool) -> String:
 		return "RESUME"
 	if id == "full" and _is_fullscreen():
 		return "WINDOW"
+	if id == "juice":
+		var main := get_parent()
+		var on: bool = main != null and main.juice != null and main.juice.is_enabled()
+		return "JUICE ON" if on else "JUICE OFF"
 	if id == "scale_down":
 		return "%dx" % (maxi(SCALE_MIN, _scale - 1) if _scale > SCALE_MIN else _scale)
 	if id == "scale_up":
