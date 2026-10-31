@@ -272,7 +272,10 @@ func _on_press(id: String) -> void:
 	elif id == "scores":
 		if str(main.get("game_mode")) == "" or main.mode_select_open:
 			return
-		main.help_open = false
+		if main.has_method("_dismiss_help"):
+			main._dismiss_help()
+		else:
+			main.help_open = false
 		main.score_open = false
 		if main.highscores != null:
 			main.highscores.open_leaderboard()

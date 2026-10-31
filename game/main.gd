@@ -84,6 +84,7 @@ const HELP_TOUCH := [
 
 enum BackdropMode { LINES_DIM, LINES_BRIGHT, HORIZON }
 const BACKDROP_CONFIG_PATH := "user://backdrop.cfg"
+const UI_CONFIG_PATH := "user://ui.cfg"
 const SCORE_HELP_ROWS := [
 	["Soft drop", "+1 per cell"],
 	["Hard drop", "+2 per cell"],
@@ -165,6 +166,8 @@ var mode_select_open := false
 var game_mode := ""
 var _mode_pick_index := 0
 var _mode_choice_rects: Array = []
+## Web only: hide the first-run controls overlay after the player has seen it once.
+var _help_seen := false
 
 var drop_timer := 0.0
 var lock_timer := 0.0
@@ -274,12 +277,13 @@ func _ready() -> void:
 	_load_leaderboard_greetings()
 	if replay_player != null:
 		replay_player.finished.connect(_on_replay_finished)
+	_load_help_seen()
 	_layout()
 	_new_game()
-	# Desktop: show keyboard controls, then mode picker, before the first piece drops.
-	# Touch: skip help and open the mode picker so the close tap cannot hard-drop.
-	help_open = not PlayDevice.is_touch_primary()
-	mode_select_open = PlayDevice.is_touch_primary()
+	# First-run help, then mode picker. Web remembers help was seen in user:// (browser storage).
+	var show_help := _should_show_startup_help()
+	help_open = show_help
+	mode_select_open = not show_help
 	game_mode = ""
 	if PlayDevice.is_touch_primary() and touch != null:
 		touch.suppress_play_taps(400)
@@ -709,6 +713,41 @@ func _save_backdrop_prefs() -> void:
 	cfg.load(BACKDROP_CONFIG_PATH)
 	cfg.set_value("display", "mode", int(backdrop_mode))
 	cfg.save(BACKDROP_CONFIG_PATH)
+
+
+func _should_show_startup_help() -> bool:
+	# Native desktop: always show controls on launch.
+	# Native touch: skip (close tap must not hard-drop).
+	# Web: show once, then skip on later visits (desktop and mobile).
+	if OS.has_feature("web"):
+		return not _help_seen
+	return not PlayDevice.is_touch_primary()
+
+
+func _load_help_seen() -> void:
+	_help_seen = false
+	if not OS.has_feature("web"):
+		return
+	var cfg := ConfigFile.new()
+	if cfg.load(UI_CONFIG_PATH) != OK:
+		return
+	_help_seen = bool(cfg.get_value("help", "seen", false))
+
+
+func _mark_help_seen() -> void:
+	if not OS.has_feature("web") or _help_seen:
+		return
+	_help_seen = true
+	var cfg := ConfigFile.new()
+	cfg.load(UI_CONFIG_PATH)
+	cfg.set_value("help", "seen", true)
+	cfg.save(UI_CONFIG_PATH)
+
+
+func _dismiss_help() -> void:
+	if help_open:
+		_mark_help_seen()
+	help_open = false
 
 
 func cycle_theme() -> void:
@@ -1285,7 +1324,7 @@ func _handle_touch_overlay(event: InputEvent) -> bool:
 	if mode_select_open and _handle_mode_select_pointer(point):
 		return true
 	if _touch_close_rect.size.x > 0.0 and _touch_close_rect.has_point(point):
-		help_open = false
+		_dismiss_help()
 		score_open = false
 		_open_mode_select_if_needed()
 		_sync_hold_flags_from_input()
@@ -1301,7 +1340,7 @@ func _handle_touch_overlay(event: InputEvent) -> bool:
 		# Eat taps on the dimmed panel so they cannot fall through to play.
 		if touch != null:
 			touch.suppress_play_taps()
-		help_open = false
+		_dismiss_help()
 		score_open = false
 		_open_mode_select_if_needed()
 		_sync_hold_flags_from_input()
@@ -1381,20 +1420,21 @@ func _input(event: InputEvent) -> void:
 		return
 	if highscores != null and highscores.handle_input(event):
 		if _highscores_open():
-			help_open = false
+			_dismiss_help()
 			score_open = false
 		get_viewport().set_input_as_handled()
 		return
 	if _key_pressed(event, KEY_H):
-		help_open = not help_open
 		if help_open:
+			_dismiss_help()
+			_open_mode_select_if_needed()
+			_sync_hold_flags_from_input()
+		else:
+			help_open = true
 			score_open = false
 			mode_select_open = false
 			if highscores != null:
 				highscores.close_overlay()
-		else:
-			_open_mode_select_if_needed()
-			_sync_hold_flags_from_input()
 		queue_redraw()
 		get_viewport().set_input_as_handled()
 		return
@@ -1404,7 +1444,7 @@ func _input(event: InputEvent) -> void:
 			return
 		score_open = not score_open
 		if score_open:
-			help_open = false
+			_dismiss_help()
 			if highscores != null:
 				highscores.close_overlay()
 		else:
@@ -1462,7 +1502,7 @@ func _input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 			return
 		if help_open or score_open:
-			help_open = false
+			_dismiss_help()
 			score_open = false
 			_open_mode_select_if_needed()
 			_sync_hold_flags_from_input()
@@ -1508,7 +1548,7 @@ func _input(event: InputEvent) -> void:
 		or _key_pressed(event, KEY_ENTER)
 		or _key_pressed(event, KEY_KP_ENTER)
 	):
-		help_open = false
+		_dismiss_help()
 		_open_mode_select_if_needed()
 		_sync_hold_flags_from_input()
 		queue_redraw()
