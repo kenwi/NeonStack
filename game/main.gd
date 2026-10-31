@@ -82,6 +82,7 @@ const HELP_TOUCH := [
 ]
 
 enum BackdropMode { LINES_DIM, LINES_BRIGHT, HORIZON }
+const BACKDROP_CONFIG_PATH := "user://backdrop.cfg"
 const SCORE_HELP_ROWS := [
 	["Soft drop", "+1 per cell"],
 	["Hard drop", "+2 per cell"],
@@ -259,6 +260,7 @@ func _ready() -> void:
 	title_font = ThemeDB.fallback_font
 	body_font = ThemeDB.fallback_font
 	ColorTheme.ensure_loaded()
+	_load_backdrop_prefs()
 	_setup_starfield()
 	_load_leaderboard_greetings()
 	if replay_player != null:
@@ -636,10 +638,28 @@ func toggle_juice() -> void:
 
 func cycle_backdrop() -> void:
 	backdrop_mode = ((int(backdrop_mode) + 1) % 3) as BackdropMode
+	_save_backdrop_prefs()
 	_sync_starfield()
 	if music != null and music.has_method("show_status"):
 		music.show_status("BG %s" % _backdrop_mode_label())
+	if touch != null:
+		touch.queue_redraw()
 	queue_redraw()
+
+
+func _load_backdrop_prefs() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(BACKDROP_CONFIG_PATH) != OK:
+		return
+	var raw: int = int(cfg.get_value("display", "mode", int(BackdropMode.HORIZON)))
+	backdrop_mode = clampi(raw, 0, 2) as BackdropMode
+
+
+func _save_backdrop_prefs() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(BACKDROP_CONFIG_PATH)
+	cfg.set_value("display", "mode", int(backdrop_mode))
+	cfg.save(BACKDROP_CONFIG_PATH)
 
 
 func cycle_theme() -> void:
