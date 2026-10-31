@@ -393,18 +393,33 @@ func _draw() -> void:
 		alpha = clampf(_status_timer / STATUS_FADE, 0.0, 1.0)
 	var vp := get_viewport_rect().size
 	var font_size := clampi(int(round(vp.y / 42.0)), 16, 26)
-	var text_size := _font.get_string_size(_status, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size)
 	var pad_x := 16.0
 	var pad_y := 8.0
+	var margin := 12.0
+	# Keep toasts in the bottom-left so they stay clear of the playfield.
+	var max_text_w := minf(vp.x * 0.42, 320.0)
+	var label := _status
+	var text_size := _font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size)
+	if text_size.x > max_text_w:
+		while label.length() > 1:
+			label = label.substr(0, label.length() - 1)
+			var candidate := label + "…"
+			text_size = _font.get_string_size(candidate, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size)
+			if text_size.x <= max_text_w:
+				label = candidate
+				break
 	var box_size := Vector2(text_size.x + pad_x * 2.0, text_size.y + pad_y * 2.0)
-	var box := Rect2(Vector2((vp.x - box_size.x) * 0.5, vp.y - box_size.y - _toast_bottom_inset()), box_size)
+	var box := Rect2(
+		Vector2(margin, vp.y - box_size.y - _toast_bottom_inset()),
+		box_size
+	)
 	draw_rect(box, ColorTheme.bg_panel(0.92 * alpha), true, -1.0, true)
 	draw_rect(box, ColorTheme.accent(0.45 * alpha), false, 1.5, true)
 	var baseline := box.position.y + pad_y + _font.get_ascent(font_size)
 	draw_string(
 		_font,
 		Vector2(box.position.x + pad_x, baseline),
-		_status,
+		label,
 		HORIZONTAL_ALIGNMENT_LEFT,
 		-1,
 		font_size,
