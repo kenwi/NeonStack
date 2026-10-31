@@ -227,10 +227,12 @@ var _touch_restart_rect := Rect2()
 var _mode_play_rect := Rect2()
 var _replay_close_rect := Rect2()
 var _replay_speed_rect := Rect2()
+var _replay_scrub_back_large_rect := Rect2()
 var _replay_scrub_back_rect := Rect2()
 var _replay_scrub_back_small_rect := Rect2()
 var _replay_scrub_fwd_small_rect := Rect2()
 var _replay_scrub_fwd_rect := Rect2()
+var _replay_scrub_fwd_large_rect := Rect2()
 var _replay_bar_rect := Rect2()
 var _replay_clock_center := Vector2.ZERO
 var _starfield: ColorRect
@@ -824,7 +826,19 @@ func _process(delta: float) -> void:
 	_sync_starfield()
 	if juice != null:
 		juice.tick(delta)
-	if game_over or paused or help_open or score_open or mode_select_open or _highscores_open() or _awaiting_mode():
+	# Replays must keep ticking even if mode-select / help / highscores are open.
+	if not replay_mode and (
+		game_over
+		or paused
+		or help_open
+		or score_open
+		or mode_select_open
+		or _highscores_open()
+		or _awaiting_mode()
+	):
+		queue_redraw()
+		return
+	if replay_mode and game_over:
 		queue_redraw()
 		return
 	var rate := replay_speed if replay_mode else 1.0
@@ -840,7 +854,9 @@ func _process(delta: float) -> void:
 		_sim_tick()
 		sim_tick += 1
 		guard += 1
-		if game_over or paused or help_open or score_open or mode_select_open or _highscores_open():
+		if game_over:
+			break
+		if not replay_mode and (paused or help_open or score_open or mode_select_open or _highscores_open()):
 			break
 	queue_redraw()
 
@@ -944,6 +960,8 @@ func apply_action(action: String, record: bool = true) -> void:
 
 
 func _can_accept_play_action() -> bool:
+	if replay_mode:
+		return not game_over and clear_timer <= 0.0
 	return (
 		not game_over
 		and not paused
@@ -979,6 +997,7 @@ func start_replay_from_data(data: Dictionary) -> bool:
 	_new_game(replay_player.get_seed())
 	help_open = false
 	score_open = false
+	mode_select_open = false
 	paused = false
 	queue_redraw()
 	return true
@@ -995,6 +1014,7 @@ func stop_replay() -> void:
 	if replay_player != null:
 		replay_player.stop()
 	_new_game()
+	_open_mode_select_if_needed()
 	queue_redraw()
 
 
@@ -1032,6 +1052,7 @@ func _replay_seek_to_tick(target_tick: int) -> void:
 	paused = false
 	help_open = false
 	score_open = false
+	mode_select_open = false
 	if juice != null:
 		juice.begin_silent()
 	if target_tick < sim_tick or game_over:
@@ -1072,10 +1093,12 @@ func _replay_speed_label() -> String:
 func _clear_replay_control_rects() -> void:
 	_replay_close_rect = Rect2()
 	_replay_speed_rect = Rect2()
+	_replay_scrub_back_large_rect = Rect2()
 	_replay_scrub_back_rect = Rect2()
 	_replay_scrub_back_small_rect = Rect2()
 	_replay_scrub_fwd_small_rect = Rect2()
 	_replay_scrub_fwd_rect = Rect2()
+	_replay_scrub_fwd_large_rect = Rect2()
 	_replay_bar_rect = Rect2()
 	_replay_clock_center = Vector2.ZERO
 
@@ -1089,21 +1112,36 @@ func _layout_replay_controls(vp: Vector2) -> void:
 	var gap := 6.0
 	var close_w := 72.0
 	var speed_w := 56.0
+	var scrub_large_w := 56.0
 	var scrub_w := 56.0
 	var scrub_small_w := 48.0
 	var clock_w := 96.0
 	var pad_x := 10.0
 	var row_w := (
 		close_w
+		+ scrub_large_w
 		+ scrub_w
 		+ scrub_small_w
 		+ clock_w
 		+ scrub_small_w
 		+ scrub_w
+		+ scrub_large_w
 		+ speed_w
-		+ gap * 6.0
+		+ gap * 8.0
 		+ pad_x * 2.0
 	)
+	# Shrink slightly on narrow viewports so the bar still fits.
+	if row_w > vp.x - 8.0:
+		var scale := (vp.x - 8.0) / row_w
+		close_w *= scale
+		speed_w *= scale
+		scrub_large_w *= scale
+		scrub_w *= scale
+		scrub_small_w *= scale
+		clock_w *= scale
+		gap *= scale
+		pad_x *= scale
+		row_w = vp.x - 8.0
 	var bottom_inset := 0.0
 	if touch != null and touch.reserves_layout():
 		bottom_inset = touch.band_height(vp.x)
@@ -1120,6 +1158,8 @@ func _layout_replay_controls(vp: Vector2) -> void:
 	var y := bar_y
 	_replay_close_rect = Rect2(x, y, close_w, btn_h)
 	x += close_w + gap
+	_replay_scrub_back_large_rect = Rect2(x, y, scrub_large_w, btn_h)
+	x += scrub_large_w + gap
 	_replay_scrub_back_rect = Rect2(x, y, scrub_w, btn_h)
 	x += scrub_w + gap
 	_replay_scrub_back_small_rect = Rect2(x, y, scrub_small_w, btn_h)
@@ -1130,6 +1170,8 @@ func _layout_replay_controls(vp: Vector2) -> void:
 	x += scrub_small_w + gap
 	_replay_scrub_fwd_rect = Rect2(x, y, scrub_w, btn_h)
 	x += scrub_w + gap
+	_replay_scrub_fwd_large_rect = Rect2(x, y, scrub_large_w, btn_h)
+	x += scrub_large_w + gap
 	_replay_speed_rect = Rect2(x, y, speed_w, btn_h)
 
 
@@ -1144,6 +1186,9 @@ func _handle_replay_pointer(event: InputEvent) -> bool:
 	if _replay_speed_rect.has_point(point):
 		_replay_cycle_speed()
 		return true
+	if _replay_scrub_back_large_rect.has_point(point):
+		_replay_scrub_seconds(-30.0)
+		return true
 	if _replay_scrub_back_rect.has_point(point):
 		_replay_scrub_seconds(-10.0)
 		return true
@@ -1155,6 +1200,9 @@ func _handle_replay_pointer(event: InputEvent) -> bool:
 		return true
 	if _replay_scrub_fwd_rect.has_point(point):
 		_replay_scrub_seconds(10.0)
+		return true
+	if _replay_scrub_fwd_large_rect.has_point(point):
+		_replay_scrub_seconds(30.0)
 		return true
 	return false
 
@@ -1169,10 +1217,20 @@ func _handle_replay_keys(event: InputEvent) -> bool:
 		_replay_cycle_speed(-1)
 		return true
 	if _key_pressed(event, KEY_LEFT):
-		_replay_scrub_seconds(-10.0 if Input.is_key_pressed(KEY_SHIFT) else -2.0)
+		if Input.is_key_pressed(KEY_CTRL) or Input.is_key_pressed(KEY_META):
+			_replay_scrub_seconds(-30.0)
+		elif Input.is_key_pressed(KEY_SHIFT):
+			_replay_scrub_seconds(-10.0)
+		else:
+			_replay_scrub_seconds(-2.0)
 		return true
 	if _key_pressed(event, KEY_RIGHT):
-		_replay_scrub_seconds(10.0 if Input.is_key_pressed(KEY_SHIFT) else 2.0)
+		if Input.is_key_pressed(KEY_CTRL) or Input.is_key_pressed(KEY_META):
+			_replay_scrub_seconds(30.0)
+		elif Input.is_key_pressed(KEY_SHIFT):
+			_replay_scrub_seconds(10.0)
+		else:
+			_replay_scrub_seconds(2.0)
 		return true
 	return false
 
@@ -2277,10 +2335,12 @@ func _draw_overlays(vp: Vector2) -> void:
 			draw_rect(_replay_bar_rect, ColorTheme.bg_panel(0.92), true, -1.0, true)
 			draw_rect(_replay_bar_rect, ColorTheme.accent(0.35), false, 1.5, true)
 		_draw_overlay_button(_replay_close_rect, "CLOSE")
+		_draw_overlay_button(_replay_scrub_back_large_rect, "-30s")
 		_draw_overlay_button(_replay_scrub_back_rect, "-10s")
 		_draw_overlay_button(_replay_scrub_back_small_rect, "-2s")
 		_draw_overlay_button(_replay_scrub_fwd_small_rect, "+2s")
 		_draw_overlay_button(_replay_scrub_fwd_rect, "+10s")
+		_draw_overlay_button(_replay_scrub_fwd_large_rect, "+30s")
 		_draw_overlay_button(_replay_speed_rect, _replay_speed_label())
 		var clock := "%s | %s" % [
 			_format_replay_clock(elapsed_seconds),
@@ -2302,7 +2362,7 @@ func _draw_overlays(vp: Vector2) -> void:
 			ColorTheme.gold()
 		)
 		if not PlayDevice.is_touch_primary() and _replay_bar_rect.size.x > 0.0:
-			var hint := "Up/Down speed   Left/Right scrub   Esc stop"
+			var hint := "Up/Down speed   Left/Right scrub (Shift 10s, Ctrl 30s)   Esc stop"
 			var hint_size_px := 12
 			var hint_w := body_font.get_string_size(hint, HORIZONTAL_ALIGNMENT_LEFT, -1, hint_size_px).x
 			draw_string(
