@@ -34,7 +34,6 @@ const HINT_SIZE_BASE := 15
 const HELP_TITLE_SIZE_BASE := 28
 const HELP_ROW_SIZE_BASE := 18
 const HELP_HINT := "Press H for controls"
-const HELP_HINT_TOUCH := "Tap Help for controls"
 const HELP_KEYS := [
 	["Left / Right", "Move"],
 	["Up / X", "Rotate"],
@@ -1943,13 +1942,47 @@ func _draw_side_panels() -> void:
 
 func _draw_hud() -> void:
 	draw_string(title_font, title_pos, "NEON STACK", HORIZONTAL_ALIGNMENT_LEFT, -1, title_size, ColorTheme.accent())
-	var hint := HELP_HINT_TOUCH if PlayDevice.is_touch_primary() else HELP_HINT
+	var mode_label := ""
 	if not game_mode.is_empty() and not mode_select_open and not help_open:
-		var mode_label := str(GameModes.FAMILY_LABELS.get(game_mode, game_mode))
+		mode_label = str(GameModes.FAMILY_LABELS.get(game_mode, game_mode))
 		if game_mode == GameModes.DAILY or game_mode == GameModes.WEEKLY:
 			mode_label = "%s %s" % [mode_label, GameModes.period_label(game_mode)]
-		hint = mode_label
-	draw_string(body_font, hint_pos, hint, HORIZONTAL_ALIGNMENT_LEFT, -1, hint_size, ColorTheme.accent(0.72))
+	if PlayDevice.is_touch_primary():
+		# Mobile uses an on-screen Help button; no "Press H" line.
+		if not mode_label.is_empty():
+			draw_string(
+				body_font,
+				hint_pos,
+				mode_label,
+				HORIZONTAL_ALIGNMENT_LEFT,
+				-1,
+				hint_size,
+				ColorTheme.accent(0.72)
+			)
+		return
+	var hint_y := hint_pos.y
+	if not mode_label.is_empty():
+		var mode_y := hint_y - (
+			body_font.get_ascent(hint_size) + body_font.get_descent(hint_size) + 4.0 * ui_scale
+		)
+		draw_string(
+			body_font,
+			Vector2(hint_pos.x, mode_y),
+			mode_label,
+			HORIZONTAL_ALIGNMENT_LEFT,
+			-1,
+			hint_size,
+			ColorTheme.gold()
+		)
+	draw_string(
+		body_font,
+		Vector2(hint_pos.x, hint_y),
+		HELP_HINT,
+		HORIZONTAL_ALIGNMENT_LEFT,
+		-1,
+		hint_size,
+		ColorTheme.accent(0.72)
+	)
 
 
 func _draw_centered_label(center: Vector2, text: String, font: Font, size: int, color: Color, y_offset: float = 0.0) -> void:
