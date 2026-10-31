@@ -2,6 +2,7 @@ extends RefCounted
 
 ## Public API via Cloudflare Tunnel (local Docker still reachable on :5090).
 const API_BASE_URL := "https://neonstack-highscores.m0b.tech"
+## Legacy classic board ids (unchanged). Period boards live in GameModes.
 const MODE_ID := "classic"
 const MODE_ID_MOBILE := "classic-mobile"
 const DEFAULT_TOP_COUNT := 100

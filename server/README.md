@@ -29,9 +29,19 @@ API:
 
 - `GET  http://localhost:5090/api/scores/classic?top=10`
 - `GET  http://localhost:5090/api/scores/classic-mobile?top=10`
+- `GET  http://localhost:5090/api/scores/daily-2026-10-31?top=10`
+- `GET  http://localhost:5090/api/scores/weekly-2026-W44-mobile?top=10`
 - `POST http://localhost:5090/api/scores`
 
-Keyboard play submits `modeId` `classic`. Touch-primary play (phone and tablet browsers) submits `classic-mobile`. The checksum includes the mode id, so each board is a separate list. Existing classic scores stay on the classic board.
+Game modes:
+
+| Mode | Desktop `modeId` | Mobile `modeId` | Seed |
+|------|------------------|-----------------|------|
+| Classic | `classic` | `classic-mobile` | Random each run |
+| Daily | `daily-YYYY-MM-DD` | `daily-YYYY-MM-DD-mobile` | Shared UTC day |
+| Weekly | `weekly-YYYY-Www` | `weekly-YYYY-Www-mobile` | Shared ISO week (Monday UTC) |
+
+Each period has its own board (desktop and mobile separated). The checksum includes the mode id. Existing classic scores stay on the classic boards.
 
 ### Submit body
 

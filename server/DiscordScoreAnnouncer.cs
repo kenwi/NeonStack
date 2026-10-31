@@ -145,12 +145,24 @@ public sealed class DiscordScoreAnnouncer
         };
     }
 
-    private static string ModeLabel(string modeId) => modeId switch
+    private static string ModeLabel(string modeId)
     {
-        "classic" => "Classic",
-        "classic-mobile" => "Mobile",
-        _ => modeId,
-    };
+        if (string.IsNullOrEmpty(modeId))
+            return modeId;
+
+        var mobile = modeId.EndsWith("-mobile", StringComparison.Ordinal);
+        var core = mobile ? modeId[..^"-mobile".Length] : modeId;
+
+        var label = core switch
+        {
+            "classic" => "Classic",
+            _ when core.StartsWith("daily-", StringComparison.Ordinal) => $"Daily {core["daily-".Length..]}",
+            _ when core.StartsWith("weekly-", StringComparison.Ordinal) => $"Weekly {core["weekly-".Length..]}",
+            _ => core,
+        };
+
+        return mobile ? $"{label} (Mobile)" : label;
+    }
 
     private static string FormatTime(float elapsedSeconds)
     {

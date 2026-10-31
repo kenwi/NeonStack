@@ -4,6 +4,7 @@ extends RefCounted
 ## Detected once so resizing a desktop window cannot change the board.
 
 const HighscoreConfig = preload("res://game/highscore/highscore_config.gd")
+const GameModes = preload("res://game/mode/game_modes.gd")
 
 static var _checked := false
 static var _touch_primary := false
@@ -16,10 +17,17 @@ static func is_touch_primary() -> bool:
 	return _touch_primary
 
 
+## Classic board for this device. Prefer GameModes.board_id for daily/weekly.
 static func score_mode_id() -> String:
 	if is_touch_primary():
 		return HighscoreConfig.MODE_ID_MOBILE
 	return HighscoreConfig.MODE_ID
+
+
+static func score_mode_id_for(game_mode: String, unix_utc: int = -1) -> String:
+	if not GameModes.is_valid_family(game_mode):
+		return score_mode_id()
+	return GameModes.board_id(game_mode, is_touch_primary(), unix_utc)
 
 
 static func pointer_down_position(event: InputEvent) -> Vector2:

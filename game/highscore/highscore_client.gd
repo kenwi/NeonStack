@@ -5,6 +5,7 @@ extends Node2D
 const HighscoreConfig = preload("res://game/highscore/highscore_config.gd")
 const HighscoreChecksum = preload("res://game/highscore/highscore_checksum.gd")
 const PlayDevice = preload("res://game/platform/play_device.gd")
+const GameModes = preload("res://game/mode/game_modes.gd")
 const ReplayFormat = preload("res://game/replay/replay_format.gd")
 const ColorTheme = preload("res://game/theme/color_theme.gd")
 
@@ -28,6 +29,10 @@ var leaderboard_open := false
 var leaderboard_page := 0
 var submit_mode_id := ""
 var view_mode_id := ""
+var _game_mode := GameModes.CLASSIC
+var _view_family := GameModes.CLASSIC
+var _view_mobile := false
+var _view_period_unix := 0
 
 var _submit_gen := 0
 var _leaderboard_gen := 0
@@ -40,7 +45,12 @@ var _name_edit: LineEdit
 var _name_field_style: StyleBoxFlat
 var _editing_name := false
 var _tab_classic_rect := Rect2()
+var _tab_daily_rect := Rect2()
+var _tab_weekly_rect := Rect2()
+var _tab_desktop_rect := Rect2()
 var _tab_mobile_rect := Rect2()
+var _period_prev_rect := Rect2()
+var _period_next_rect := Rect2()
 var _lb_close_rect := Rect2()
 var _lb_restart_rect := Rect2()
 var _submit_rect := Rect2()
@@ -57,8 +67,11 @@ var _ui_scale := 1.0
 func _ready() -> void:
 	_title_font = ThemeDB.fallback_font
 	_body_font = ThemeDB.fallback_font
+	_view_mobile = PlayDevice.is_touch_primary()
+	_view_period_unix = GameModes.utc_now_unix()
 	submit_mode_id = PlayDevice.score_mode_id()
 	view_mode_id = submit_mode_id
+	_sync_view_from_board_id(view_mode_id)
 	_name_edit = LineEdit.new()
 	_name_edit.visible = false
 	_name_edit.max_length = HighscoreConfig.MAX_PLAYER_NAME_LENGTH
@@ -103,6 +116,19 @@ func set_ui_scale(ui_scale: float) -> void:
 	_ui_scale = maxf(0.5, ui_scale)
 
 
+func set_game_mode(game_mode: String, unix_utc: int = -1) -> void:
+	if not GameModes.is_valid_family(game_mode):
+		return
+	_game_mode = game_mode
+	if unix_utc < 0:
+		unix_utc = GameModes.utc_now_unix()
+	submit_mode_id = GameModes.board_id(game_mode, PlayDevice.is_touch_primary(), unix_utc)
+	view_mode_id = submit_mode_id
+	_view_family = game_mode
+	_view_mobile = PlayDevice.is_touch_primary()
+	_view_period_unix = unix_utc
+
+
 func reset_run() -> void:
 	phase = Phase.IDLE
 	status_text = ""
@@ -118,6 +144,7 @@ func reset_run() -> void:
 	pending_checksum = ""
 	include_replay = true
 	view_mode_id = submit_mode_id
+	_sync_view_from_board_id(view_mode_id)
 	_submit_gen += 1
 	_leaderboard_gen += 1
 	_replay_gen += 1
@@ -139,6 +166,7 @@ func begin_game_over(score: int, lines: int, level: int, elapsed_seconds: float)
 	status_text = ""
 	leaderboard_open = false
 	view_mode_id = submit_mode_id
+	_sync_view_from_board_id(view_mode_id)
 	if submitted_this_run:
 		phase = Phase.LEADERBOARD
 		_hide_touch_keyboard()
@@ -155,9 +183,59 @@ func open_leaderboard() -> void:
 	if is_capturing_input():
 		return
 	view_mode_id = submit_mode_id
+	_sync_view_from_board_id(view_mode_id)
 	leaderboard_open = true
 	leaderboard_page = 0
 	phase = Phase.LEADERBOARD
+	_fetch_leaderboard()
+	queue_redraw()
+
+
+func _sync_view_from_board_id(board_id: String) -> void:
+	_view_family = GameModes.family_from_board_id(board_id)
+	_view_mobile = GameModes.is_mobile_board(board_id)
+	if _view_family == GameModes.CLASSIC:
+		_view_period_unix = GameModes.utc_now_unix()
+	else:
+		_view_period_unix = GameModes.period_unix_from_board_id(board_id)
+
+
+func _rebuild_view_mode_id() -> String:
+	return GameModes.board_id(_view_family, _view_mobile, _view_period_unix)
+
+
+func _set_view_family(family: String) -> void:
+	if not GameModes.is_valid_family(family):
+		return
+	if _view_family == family:
+		return
+	_view_family = family
+	_view_period_unix = GameModes.utc_now_unix()
+	_apply_view_mode(_rebuild_view_mode_id())
+
+
+func _set_view_platform(mobile: bool) -> void:
+	if _view_mobile == mobile:
+		return
+	_view_mobile = mobile
+	_apply_view_mode(_rebuild_view_mode_id())
+
+
+func _shift_view_period(delta: int) -> void:
+	if _view_family == GameModes.CLASSIC:
+		return
+	_view_period_unix = GameModes.shift_period_unix(_view_family, _view_period_unix, delta)
+	_apply_view_mode(_rebuild_view_mode_id())
+
+
+func _apply_view_mode(mode_id: String) -> void:
+	if view_mode_id == mode_id:
+		queue_redraw()
+		return
+	view_mode_id = mode_id
+	entries.clear()
+	leaderboard_page = 0
+	status_text = ""
 	_fetch_leaderboard()
 	queue_redraw()
 
@@ -252,10 +330,22 @@ func handle_input(event: InputEvent) -> bool:
 
 	if (leaderboard_open or phase == Phase.LEADERBOARD) and not is_capturing_input():
 		if _key_pressed(event, KEY_LEFT):
-			_set_leaderboard_page(leaderboard_page - 1)
+			if _view_family != GameModes.CLASSIC and event.shift_pressed:
+				_shift_view_period(-1)
+			else:
+				_set_leaderboard_page(leaderboard_page - 1)
 			return true
 		if _key_pressed(event, KEY_RIGHT):
-			_set_leaderboard_page(leaderboard_page + 1)
+			if _view_family != GameModes.CLASSIC and event.shift_pressed:
+				_shift_view_period(1)
+			else:
+				_set_leaderboard_page(leaderboard_page + 1)
+			return true
+		if _key_pressed(event, KEY_COMMA) and _view_family != GameModes.CLASSIC:
+			_shift_view_period(-1)
+			return true
+		if _key_pressed(event, KEY_PERIOD) and _view_family != GameModes.CLASSIC:
+			_shift_view_period(1)
 			return true
 
 	if _key_pressed(event, KEY_L) and not is_capturing_input():
@@ -346,6 +436,7 @@ func _skip_name_entry() -> void:
 	phase = Phase.LEADERBOARD
 	status_text = "Skipped submit"
 	view_mode_id = submit_mode_id
+	_sync_view_from_board_id(view_mode_id)
 	_fetch_leaderboard()
 	queue_redraw()
 
@@ -384,10 +475,25 @@ func _handle_leaderboard_pointer(event: InputEvent) -> bool:
 	_layout_leaderboard(get_viewport_rect().size)
 	var point := PlayDevice.pointer_down_position(event)
 	if _tab_classic_rect.has_point(point):
-		_set_view_mode(HighscoreConfig.MODE_ID)
+		_set_view_family(GameModes.CLASSIC)
+		return true
+	if _tab_daily_rect.has_point(point):
+		_set_view_family(GameModes.DAILY)
+		return true
+	if _tab_weekly_rect.has_point(point):
+		_set_view_family(GameModes.WEEKLY)
+		return true
+	if _tab_desktop_rect.has_point(point):
+		_set_view_platform(false)
 		return true
 	if _tab_mobile_rect.has_point(point):
-		_set_view_mode(HighscoreConfig.MODE_ID_MOBILE)
+		_set_view_platform(true)
+		return true
+	if _period_prev_rect.size.x > 0.0 and _period_prev_rect.has_point(point):
+		_shift_view_period(-1)
+		return true
+	if _period_next_rect.size.x > 0.0 and _period_next_rect.has_point(point):
+		_shift_view_period(1)
 		return true
 	for page_target in _page_hit_targets:
 		var page_rect: Rect2 = page_target.rect
@@ -422,17 +528,6 @@ func _suppress_touch_zones() -> void:
 	var touch = main.get_node_or_null("TouchControls")
 	if touch != null:
 		touch.suppress_play_taps()
-
-
-func _set_view_mode(mode_id: String) -> void:
-	if view_mode_id == mode_id:
-		return
-	view_mode_id = mode_id
-	entries.clear()
-	leaderboard_page = 0
-	status_text = ""
-	_fetch_leaderboard()
-	queue_redraw()
 
 
 func _process(delta: float) -> void:
@@ -672,9 +767,24 @@ func _draw_leaderboard_panel(vp: Vector2) -> void:
 	var hint_size := maxi(11, int(round(13 * ui_scale)))
 	var y := panel.position.y + 28.0 * ui_scale
 	_draw_centered(_title_font, Vector2(panel.get_center().x, y), _board_title(), title_size, ColorTheme.accent())
-	_draw_choice(_tab_classic_rect, "CLASSIC", view_mode_id != HighscoreConfig.MODE_ID_MOBILE)
-	_draw_choice(_tab_mobile_rect, "MOBILE", view_mode_id == HighscoreConfig.MODE_ID_MOBILE)
-	y = _tab_classic_rect.end.y + 22.0 * ui_scale
+	_draw_choice(_tab_classic_rect, "CLASSIC", _view_family == GameModes.CLASSIC)
+	_draw_choice(_tab_daily_rect, "DAILY", _view_family == GameModes.DAILY)
+	_draw_choice(_tab_weekly_rect, "WEEKLY", _view_family == GameModes.WEEKLY)
+	_draw_choice(_tab_desktop_rect, "DESKTOP", not _view_mobile)
+	_draw_choice(_tab_mobile_rect, "MOBILE", _view_mobile)
+	y = _tab_desktop_rect.end.y + 18.0 * ui_scale
+	if _view_family != GameModes.CLASSIC:
+		var period := GameModes.period_label(_view_family, _view_period_unix)
+		_draw_choice(_period_prev_rect, "<", false, maxi(12, int(round(14 * ui_scale))))
+		_draw_choice(_period_next_rect, ">", false, maxi(12, int(round(14 * ui_scale))))
+		_draw_centered(
+			_body_font,
+			Vector2(panel.get_center().x, y + 12.0 * ui_scale),
+			period,
+			header_size,
+			ColorTheme.gold()
+		)
+		y = maxf(_period_prev_rect.end.y, _period_next_rect.end.y) + 16.0 * ui_scale
 	if submitted_rank > 0 and view_mode_id == submit_mode_id:
 		_draw_centered(
 			_body_font,
@@ -1129,9 +1239,7 @@ func _on_request_completed(
 
 
 func _board_title() -> String:
-	if view_mode_id == HighscoreConfig.MODE_ID_MOBILE:
-		return "MOBILE HIGHSCORES"
-	return "HIGHSCORES"
+	return GameModes.board_title(view_mode_id)
 
 
 func _layout_name_targets(vp: Vector2) -> Rect2:
@@ -1242,16 +1350,18 @@ func _layout_leaderboard(vp: Vector2) -> Rect2:
 	var rows := clampi(entries.size(), 1, HighscoreConfig.LEADERBOARD_PAGE_SIZE)
 	var page_count := _leaderboard_page_count()
 	var pager_h := 40.0 * ui_scale if page_count > 1 else 0.0
-	var tab_h := maxf(36.0, 32.0 * ui_scale)
+	var tab_h := maxf(32.0, 28.0 * ui_scale)
+	var period_h := tab_h if _view_family != GameModes.CLASSIC else 0.0
 	var action_h := 56.0 if touch_ui else 0.0
 	var panel_h := minf(
 		100.0 * ui_scale
-		+ tab_h
+		+ tab_h * 2.0
+		+ period_h
 		+ action_h
 		+ header_h
 		+ float(rows) * row_h
 		+ pager_h
-		+ 48.0 * ui_scale,
+		+ 56.0 * ui_scale,
 		vp.y - 16.0
 	)
 	var panel_y := (vp.y - panel_h) * 0.5
@@ -1259,10 +1369,22 @@ func _layout_leaderboard(vp: Vector2) -> Rect2:
 		panel_y = maxf(8.0, panel_y)
 	var panel := Rect2((vp.x - panel_w) * 0.5, panel_y, panel_w, panel_h)
 	var gap := 8.0
-	var tab_w := (panel.size.x - 24.0 - gap) * 0.5
-	var tab_y := panel.position.y + 40.0 * ui_scale
-	_tab_classic_rect = Rect2(panel.position.x + 12.0, tab_y, tab_w, tab_h)
-	_tab_mobile_rect = Rect2(_tab_classic_rect.end.x + gap, tab_y, tab_w, tab_h)
+	var family_w := (panel.size.x - 24.0 - gap * 2.0) / 3.0
+	var tab_y := panel.position.y + 52.0 * ui_scale
+	_tab_classic_rect = Rect2(panel.position.x + 12.0, tab_y, family_w, tab_h)
+	_tab_daily_rect = Rect2(_tab_classic_rect.end.x + gap, tab_y, family_w, tab_h)
+	_tab_weekly_rect = Rect2(_tab_daily_rect.end.x + gap, tab_y, family_w, tab_h)
+	var platform_w := (panel.size.x - 24.0 - gap) * 0.5
+	var platform_y := _tab_classic_rect.end.y + 8.0
+	_tab_desktop_rect = Rect2(panel.position.x + 12.0, platform_y, platform_w, tab_h)
+	_tab_mobile_rect = Rect2(_tab_desktop_rect.end.x + gap, platform_y, platform_w, tab_h)
+	_period_prev_rect = Rect2()
+	_period_next_rect = Rect2()
+	if _view_family != GameModes.CLASSIC:
+		var period_y := _tab_desktop_rect.end.y + 8.0
+		var period_btn_w := maxf(36.0, 40.0 * ui_scale)
+		_period_prev_rect = Rect2(panel.position.x + 12.0, period_y, period_btn_w, tab_h)
+		_period_next_rect = Rect2(panel.end.x - 12.0 - period_btn_w, period_y, period_btn_w, tab_h)
 	_lb_close_rect = Rect2()
 	_lb_restart_rect = Rect2()
 	if touch_ui:

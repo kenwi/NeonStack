@@ -145,7 +145,9 @@ func _is_overlay_blocking() -> bool:
 	var main := get_parent()
 	if main == null:
 		return true
-	if main.help_open or main.score_open or main.game_over:
+	if main.help_open or main.score_open or main.mode_select_open or main.game_over:
+		return true
+	if str(main.get("game_mode")) == "":
 		return true
 	if main.replay_mode:
 		return true
@@ -263,10 +265,13 @@ func _on_press(id: String) -> void:
 	elif id == "help":
 		main.help_open = true
 		main.score_open = false
+		main.mode_select_open = false
 		if main.highscores != null:
 			main.highscores.close_overlay()
 		main.queue_redraw()
 	elif id == "scores":
+		if str(main.get("game_mode")) == "" or main.mode_select_open:
+			return
 		main.help_open = false
 		main.score_open = false
 		if main.highscores != null:
@@ -275,7 +280,7 @@ func _on_press(id: String) -> void:
 	elif id == "restart":
 		if main.replay_mode:
 			main.stop_replay()
-		else:
+		elif str(main.get("game_mode")) != "" and not main.mode_select_open:
 			main._new_game()
 	elif id == "mute":
 		var music := main.get_node_or_null("Music")
@@ -349,6 +354,8 @@ func _can_play() -> bool:
 		and not main.paused
 		and not main.help_open
 		and not main.score_open
+		and not main.mode_select_open
+		and str(main.get("game_mode")) != ""
 		and not main.replay_mode
 		and main.clear_timer <= 0.0
 		and not main._highscores_open()
