@@ -822,10 +822,13 @@ func _handle_das(delta: float) -> void:
 		das_timer = 0.0
 		arr_timer = 0.0
 		return
+	# Touch (zones + on-screen D-pad): shorter charge and faster auto-repeat.
+	var das_delay := 0.10 if PlayDevice.is_touch_primary() else 0.15
+	var arr_interval := 0.016 if PlayDevice.is_touch_primary() else 0.03
 	if dir != move_held:
 		move_held = dir
 		_try_move(dir, 0)
-		das_timer = 0.15
+		das_timer = das_delay
 		arr_timer = 0.0
 		return
 	das_timer -= delta
@@ -833,7 +836,7 @@ func _handle_das(delta: float) -> void:
 		arr_timer -= delta
 		if arr_timer <= 0.0:
 			_try_move(dir, 0)
-			arr_timer = 0.03
+			arr_timer = arr_interval
 
 
 func apply_action(action: String, record: bool = true) -> void:

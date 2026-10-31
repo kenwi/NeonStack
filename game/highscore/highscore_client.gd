@@ -574,12 +574,16 @@ func _leaderboard_columns(panel: Rect2, ui_scale: float) -> Dictionary:
 		name_w = _body_font.get_string_size(
 			name_sample, HORIZONTAL_ALIGNMENT_LEFT, -1, body_size
 		).x
-	var date_sample := "00.00.0000 00:00"
-	var date_w := 120.0 * ui_scale
-	if _body_font != null:
-		date_w = _body_font.get_string_size(
-			date_sample, HORIZONTAL_ALIGNMENT_LEFT, -1, body_size
-		).x + 4.0 * ui_scale
+	# Mobile boards are tight; skip the datetime column there.
+	var show_date := not PlayDevice.is_touch_primary()
+	var date_w := 0.0
+	if show_date:
+		var date_sample := "00.00.0000 00:00"
+		date_w = 120.0 * ui_scale
+		if _body_font != null:
+			date_w = _body_font.get_string_size(
+				date_sample, HORIZONTAL_ALIGNMENT_LEFT, -1, body_size
+			).x + 4.0 * ui_scale
 	var score_w := 92.0 * ui_scale
 	var lv_w := 52.0 * ui_scale
 	var lines_w := 108.0 * ui_scale
@@ -587,7 +591,7 @@ func _leaderboard_columns(panel: Rect2, ui_scale: float) -> Dictionary:
 	var replay_btn_w := 60.0 * ui_scale
 	var time_w := 48.0 * ui_scale
 	var name_x := inner_left + rank_w + gap
-	var date_x := name_x + name_w + gap
+	var date_x := name_x + name_w + (gap if show_date else 0.0)
 	var time_x := inner_right - time_w
 	var replay_x := time_x - gap - replay_col_w
 	var lines_x := replay_x - gap - lines_w
@@ -600,6 +604,7 @@ func _leaderboard_columns(panel: Rect2, ui_scale: float) -> Dictionary:
 		"name_w": name_w,
 		"date_x": date_x,
 		"date_w": date_w,
+		"show_date": show_date,
 		"score_x": score_x,
 		"score_w": score_w,
 		"lv_x": lv_x,
@@ -704,7 +709,8 @@ func _draw_leaderboard_panel(vp: Vector2) -> void:
 		var header_color := ColorTheme.muted()
 		_draw_leaderboard_col("#", cols.rank_x, y, cols.rank_w, header_size, header_color)
 		_draw_leaderboard_col("NAME", cols.name_x, y, cols.name_w, header_size, header_color)
-		_draw_leaderboard_col("DATE", cols.date_x, y, cols.date_w, header_size, header_color)
+		if cols.show_date:
+			_draw_leaderboard_col("DATE", cols.date_x, y, cols.date_w, header_size, header_color)
 		_draw_leaderboard_col("SCORE", cols.score_x, y, cols.score_w, header_size, header_color, true)
 		_draw_leaderboard_col("LEVEL", cols.lv_x, y, cols.lv_w, header_size, header_color, true)
 		_draw_leaderboard_col("LINES CLEARED", cols.lines_x, y, cols.lines_w, header_size, header_color, true)
@@ -733,7 +739,8 @@ func _draw_leaderboard_panel(vp: Vector2) -> void:
 			var muted := ColorTheme.gold(0.78) if is_you else ColorTheme.muted()
 			_draw_leaderboard_col("#%d" % rank, cols.rank_x, y, cols.rank_w, body_size, primary)
 			_draw_leaderboard_col(pname, cols.name_x, y, cols.name_w, body_size, primary)
-			_draw_leaderboard_col(submitted_at, cols.date_x, y, cols.date_w, body_size, muted)
+			if cols.show_date:
+				_draw_leaderboard_col(submitted_at, cols.date_x, y, cols.date_w, body_size, muted)
 			_draw_leaderboard_col(
 				HighscoreConfig.format_score(score),
 				cols.score_x,

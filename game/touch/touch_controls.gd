@@ -3,7 +3,7 @@ extends Node2D
 ## On-screen buttons for touch-primary sessions (phone and tablet browsers).
 ## Held move and soft-drop buttons feed the same action bus as the keyboard.
 ## Taps emit rotate, hard-drop, and hold actions.
-## A tap that misses the buttons is one of four screen quadrants.
+## Missed buttons: upper play-band zones hold left/right (DAS); lower tap rot/drop.
 
 const PlayDevice = preload("res://game/platform/play_device.gd")
 const ReplayActions = preload("res://game/replay/actions.gd")
@@ -22,6 +22,9 @@ const HOLD_ACTIONS := {
 	"left": "left",
 	"right": "right",
 	"down": "soft",
+	## Upper play-band zones: hold engages DAS like the D-pad.
+	"zone_left": "left",
+	"zone_right": "right",
 }
 const TAP_ACTIONS := ["rot", "ccw", "drop", "hold"]
 const UTILITY := ["pause", "help", "scores", "restart", "mute", "full", "zones", "scale_down", "scale_up"]
@@ -166,7 +169,14 @@ func _begin_finger(index: int, pos: Vector2) -> bool:
 		if _zones_blocked():
 			_fingers[index] = ""
 			return true
-		if _tap_quadrant(pos):
+		var zone_id := _zone_id_at(pos)
+		if zone_id == "zone_left" or zone_id == "zone_right":
+			_fingers[index] = zone_id
+			_set_hold(str(HOLD_ACTIONS[zone_id]), true)
+			queue_redraw()
+			return true
+		if zone_id == "rot" or zone_id == "drop":
+			_tap_zone_action(zone_id)
 			_fingers[index] = ""
 			return true
 		return false
@@ -216,11 +226,16 @@ func _retarget(index: int, pos: Vector2) -> void:
 		return
 	_rebuild_rects()
 	var next := _hit(pos)
+	# Dragging across the play band keeps upper left/right zone DAS alive.
+	if next == "" and prev.begins_with("zone_"):
+		var zone_next := _zone_id_at(pos)
+		if zone_next == "zone_left" or zone_next == "zone_right":
+			next = zone_next
 	if next == prev:
 		return
 	if HOLD_ACTIONS.has(prev):
 		_set_hold(str(HOLD_ACTIONS[prev]), false)
-	# Sliding onto a tap button must not fire it. Only held move buttons retarget.
+	# Sliding onto a tap button must not fire it. Only held move controls retarget.
 	if next != "" and HOLD_ACTIONS.has(next):
 		_set_hold(str(HOLD_ACTIONS[next]), true)
 		_fingers[index] = next
@@ -295,25 +310,27 @@ func _on_press(id: String) -> void:
 		_set_scale(_scale + 1)
 
 
-func _tap_quadrant(pos: Vector2) -> bool:
-	# Upper half nudges one column. Lower half rotates or hard-drops.
-	# Zones live only in the open play band between the top and bottom buttons.
+## Upper left/right hold for DAS. Lower left/right tap for rotate / hard drop.
+func _zone_id_at(pos: Vector2) -> String:
 	if not _can_play():
-		return false
+		return ""
 	var zone := _play_zone_rect()
 	if zone.size.y <= 1.0 or not zone.has_point(pos):
-		return false
-	var main := get_parent()
+		return ""
 	var mid := zone.get_center()
 	var left := pos.x < mid.x
 	var upper := pos.y < mid.y
 	if upper:
-		main.apply_action(ReplayActions.NUDGE_LEFT if left else ReplayActions.NUDGE_RIGHT)
-	elif left:
+		return "zone_left" if left else "zone_right"
+	return "rot" if left else "drop"
+
+
+func _tap_zone_action(zone_id: String) -> void:
+	var main := get_parent()
+	if zone_id == "rot":
 		main.apply_action(ReplayActions.ROT)
-	else:
+	elif zone_id == "drop":
 		main.apply_action(ReplayActions.DROP)
-	return true
 
 
 func _play_zone_rect() -> Rect2:
