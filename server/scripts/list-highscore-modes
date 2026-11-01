@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+"""List game-mode boards present in a Neon Stack highscores JSON file.
+
+Examples:
+  list-highscore-modes
+  list-highscore-modes --highscores /data/highscores.json
+  list-highscore-modes -v
+  list-highscore-modes --mode classic -v
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from datetime import datetime
+from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SCRIPT_DIR.parent.parent
+DEFAULT_HIGHSCORES = REPO_ROOT / "server" / "data" / "highscores.json"
+
+
+def load_modes(path: Path) -> dict[str, list[dict]]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    modes = data.get("Modes") or data.get("modes") or {}
+    if not isinstance(modes, dict):
+        raise ValueError("highscores JSON missing Modes object")
+    out: dict[str, list[dict]] = {}
+    for mode_id, entries in modes.items():
+        if isinstance(entries, list):
+            out[str(mode_id)] = [e for e in entries if isinstance(e, dict)]
+        else:
+            out[str(mode_id)] = []
+    return out
+
+
+def entry_score(entry: dict) -> int:
+    return int(entry.get("FinalScore", entry.get("finalScore", 0)))
+
+
+def entry_elapsed(entry: dict) -> float:
+    return float(entry.get("ElapsedSeconds", entry.get("elapsedSeconds", 0.0)))
+
+
+def entry_submitted(entry: dict) -> str:
+    return str(entry.get("SubmittedAt", entry.get("submittedAt", "")))
+
+
+def entry_name(entry: dict) -> str:
+    return str(entry.get("PlayerName", entry.get("playerName", "")))
+
+
+def entry_checksum(entry: dict) -> str:
+    return str(entry.get("Checksum", entry.get("checksum", "")))
+
+
+def entry_has_replay(entry: dict) -> bool:
+    return bool(entry.get("HasReplay", entry.get("hasReplay", False)))
+
+
+def ranked(entries: list[dict]) -> list[dict]:
+    """Match server GetTopAsync ordering: score desc, elapsed asc, submitted asc."""
+    return sorted(
+        entries,
+        key=lambda e: (-entry_score(e), entry_elapsed(e), entry_submitted(e)),
+    )
+
+
+def format_elapsed(seconds: float) -> str:
+    total = max(0, int(seconds))
+    return f"{total // 60}:{total % 60:02d}"
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="List highscore board mode ids (and optional rank previews)."
+    )
+    parser.add_argument(
+        "--highscores",
+        type=Path,
+        default=DEFAULT_HIGHSCORES,
+        help=f"Path to highscores.json (default: {DEFAULT_HIGHSCORES})",
+    )
+    parser.add_argument(
+        "--mode",
+        default=None,
+        help="Only show this mode id (exact match, case-insensitive)",
+    )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Print ranked entries (name, score, checksum prefix, replay flag)",
+    )
+    parser.add_argument(
+        "-n",
+        "--top",
+        type=int,
+        default=10,
+        help="With -v, how many ranks to show per mode (default: 10)",
+    )
+    args = parser.parse_args()
+
+    path = args.highscores.expanduser().resolve()
+    if not path.is_file():
+        sys.stderr.write(f"error: highscores file not found: {path}\n")
+        return 2
+
+    try:
+        modes = load_modes(path)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        sys.stderr.write(f"error: failed to read highscores: {exc}\n")
+        return 2
+
+    mode_ids = sorted(modes.keys(), key=str.lower)
+    if args.mode:
+        needle = args.mode.strip().lower()
+        mode_ids = [m for m in mode_ids if m.lower() == needle]
+        if not mode_ids:
+            sys.stderr.write(f"error: mode not found: {args.mode}\n")
+            sys.stderr.write("available: " + (", ".join(sorted(modes.keys())) or "(none)") + "\n")
+            return 1
+
+    if not mode_ids:
+        print("(no modes)")
+        return 0
+
+    print(f"{'MODE':<36} {'ENTRIES':>7}  {'REPLAYS':>7}")
+    print("-" * 56)
+    for mode_id in mode_ids:
+        entries = modes[mode_id]
+        replay_n = sum(1 for e in entries if entry_has_replay(e))
+        print(f"{mode_id:<36} {len(entries):>7}  {replay_n:>7}")
+        if not args.verbose:
+            continue
+        for rank, entry in enumerate(ranked(entries)[: max(0, args.top)], start=1):
+            cs = entry_checksum(entry)
+            short = (cs[:12] + "…") if len(cs) > 12 else (cs or "-")
+            flag = "R" if entry_has_replay(entry) else "-"
+            print(
+                f"  #{rank:<3} {entry_name(entry):<16} "
+                f"{entry_score(entry):>8}  {format_elapsed(entry_elapsed(entry)):>5}  "
+                f"{flag}  {short}"
+            )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -50,6 +50,10 @@ func _ready() -> void:
 	_player.finished.connect(_on_finished)
 	add_child(_player)
 	_load_volume_prefs()
+	# Headless verify / CI: skip stream prefetch so exit stays leak-clean.
+	if DisplayServer.get_name() == "headless":
+		_tracks = TRACK_PATHS.duplicate(true)
+		return
 	_tracks = TRACK_PATHS.duplicate(true)
 	_shuffle_tracks()
 	_prefetch_all()

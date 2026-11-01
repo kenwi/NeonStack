@@ -1,0 +1,202 @@
+#!/usr/bin/env python3
+"""Verify a Neon Stack highscore by replaying it headless in Godot.
+
+Looks up an entry by --checksum, by --mode + --rank (1-based leaderboard
+spot), or verifies every entry on a board with --mode + --all.
+
+Examples:
+  verify-highscore --checksum abcdef...
+  verify-highscore --mode classic --rank 1
+  verify-highscore --mode classic --all
+  verify-highscore --mode classic --all --replays-only
+  verify-highscore -m classic-mobile -a --highscores /data/highscores.json
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SCRIPT_DIR.parent.parent
+DEFAULT_HIGHSCORES = REPO_ROOT / "server" / "data" / "highscores.json"
+DEFAULT_REPLAYS = REPO_ROOT / "server" / "data" / "replays"
+VERIFY_SCRIPT = "res://tools/verify/headless_verify.gd"
+GODOT_BANNER_RE = re.compile(r"^Godot Engine v")
+WARNING_RE = re.compile(r"^(\s*)(WARNING)(:|\b)")
+# Match GDScript PASS/FAIL coloring: on unless NO_COLOR is set.
+USE_COLOR = os.environ.get("NO_COLOR") is None
+
+
+def colorize_line(line: str) -> str:
+    if not USE_COLOR:
+        return line
+    return WARNING_RE.sub(
+        lambda m: f"{m.group(1)}\033[33m{m.group(2)}\033[0m{m.group(3)}",
+        line,
+        count=1,
+    )
+
+
+def find_godot() -> str:
+    env = os.environ.get("GODOT") or os.environ.get("GODOT4")
+    if env:
+        return env
+    for name in ("godot", "godot4", "godot4-stable"):
+        path = shutil.which(name)
+        if path:
+            return path
+    sys.stderr.write(
+        "error: Godot binary not found (set GODOT=/path/to/godot or install godot on PATH)\n"
+    )
+    sys.exit(127)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Headless highscore verification via Godot replay sim."
+    )
+    parser.add_argument(
+        "-c",
+        "--checksum",
+        default=None,
+        help="Highscore checksum (SHA-256 hex) to verify",
+    )
+    parser.add_argument(
+        "-m",
+        "--mode",
+        default=None,
+        help="Board mode id (use with --rank / --all, or to scope --checksum)",
+    )
+    parser.add_argument(
+        "-r",
+        "--rank",
+        type=int,
+        default=None,
+        help="1-based leaderboard rank within --mode",
+    )
+    parser.add_argument(
+        "-a",
+        "--all",
+        action="store_true",
+        help="Verify every entry on --mode (ranked order)",
+    )
+    parser.add_argument(
+        "--replays-only",
+        action="store_true",
+        help="Skip entries that have no replay file (useful with --all)",
+    )
+    parser.add_argument(
+        "--highscores",
+        type=Path,
+        default=DEFAULT_HIGHSCORES,
+        help=f"Path to highscores.json (default: {DEFAULT_HIGHSCORES})",
+    )
+    parser.add_argument(
+        "--replays",
+        type=Path,
+        default=DEFAULT_REPLAYS,
+        help=f"Directory of {{checksum}}.json replays (default: {DEFAULT_REPLAYS})",
+    )
+    parser.add_argument(
+        "--godot",
+        default=None,
+        help="Godot binary (default: $GODOT or godot on PATH)",
+    )
+    args = parser.parse_args()
+
+    checksum = (args.checksum or "").strip()
+    mode = (args.mode or "").strip()
+    rank = args.rank
+    verify_all = bool(args.all)
+
+    if verify_all:
+        if checksum or rank is not None:
+            parser.error("--all cannot be combined with --checksum or --rank")
+        if not mode:
+            parser.error("--all requires --mode")
+    elif checksum:
+        if rank is not None and not mode:
+            parser.error("--rank requires --mode when used with --checksum")
+    elif mode and rank is not None:
+        if rank < 1:
+            parser.error("--rank must be >= 1")
+    elif mode and rank is None:
+        parser.error("--mode requires --rank or --all (or pass --checksum)")
+    elif rank is not None and not mode:
+        parser.error("--rank requires --mode")
+    else:
+        parser.error(
+            "Required: --checksum HEX  OR  --mode MODE --rank N  OR  --mode MODE --all"
+        )
+
+    godot = args.godot or find_godot()
+    highscores = args.highscores.expanduser().resolve()
+    replays = args.replays.expanduser().resolve()
+
+    if not highscores.is_file():
+        sys.stderr.write(f"error: highscores file not found: {highscores}\n")
+        return 2
+    if not replays.is_dir():
+        sys.stderr.write(f"error: replays directory not found: {replays}\n")
+        return 2
+
+    cmd = [
+        godot,
+        "--headless",
+        "--path",
+        str(REPO_ROOT),
+        "--script",
+        VERIFY_SCRIPT,
+        "--",
+        "--highscores",
+        str(highscores),
+        "--replays",
+        str(replays),
+    ]
+    if checksum:
+        cmd.extend(["--checksum", checksum])
+    if mode:
+        cmd.extend(["--mode", mode])
+    if rank is not None:
+        cmd.extend(["--rank", str(rank)])
+    if verify_all:
+        cmd.append("--all")
+    if args.replays_only:
+        cmd.append("--replays-only")
+
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(REPO_ROOT),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+    except OSError as exc:
+        sys.stderr.write(f"error: failed to run Godot: {exc}\n")
+        return 127
+
+    assert proc.stdout is not None
+    skip_next_blank = False
+    for line in proc.stdout:
+        if GODOT_BANNER_RE.match(line):
+            skip_next_blank = True
+            continue
+        if skip_next_blank and line.strip() == "":
+            skip_next_blank = False
+            continue
+        skip_next_blank = False
+        sys.stdout.write(colorize_line(line))
+        sys.stdout.flush()
+    return int(proc.wait())
+
+
+if __name__ == "__main__":
+    sys.exit(main())

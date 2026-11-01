@@ -1170,6 +1170,49 @@ func start_replay_from_data(data: Dictionary) -> bool:
 	return true
 
 
+## Apply board id so DAS / lock-reset rules match the recorded highscore board.
+func configure_run_from_board_id(board_id: String) -> void:
+	var family := GameModes.family_from_board_id(board_id)
+	var diff := GameModes.difficulty_from_board_id(board_id)
+	if GameModes.is_valid_family(family):
+		game_mode = family
+	if GameModes.is_valid_difficulty(diff):
+		difficulty = diff
+	if highscores != null and highscores.has_method("set_game_mode") and not game_mode.is_empty():
+		highscores.set_game_mode(game_mode, GameModes.period_unix_from_board_id(board_id), difficulty)
+
+
+## Deterministic full replay scrub for headless verification (no wall-clock wait).
+## Returns true when the run reached game over within the tick cap.
+func fast_forward_replay_until_done() -> bool:
+	if not replay_mode or replay_player == null or _replay_seeking:
+		return false
+	_replay_seeking = true
+	paused = false
+	help_open = false
+	score_open = false
+	mode_select_open = false
+	var prev_quiet: bool = bool(replay_player.quiet_mismatch)
+	replay_player.quiet_mismatch = true
+	if juice != null:
+		juice.begin_silent()
+	var guard := 0
+	var limit := TICK_HZ * 60 * 120
+	while not game_over and guard < limit:
+		replay_player.inject_for_tick(sim_tick, self)
+		_sim_tick()
+		sim_tick += 1
+		guard += 1
+	tick_accum = 0.0
+	if juice != null:
+		juice.end_silent()
+		juice.reset_run()
+	replay_player.quiet_mismatch = prev_quiet
+	_replay_seeking = false
+	queue_redraw()
+	return game_over
+
+
 func stop_replay() -> void:
 	if not replay_mode:
 		return

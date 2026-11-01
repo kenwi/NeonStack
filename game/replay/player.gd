@@ -8,6 +8,8 @@ const ReplayActions = preload("res://game/replay/actions.gd")
 signal finished(matched: bool)
 
 var playing := false
+## When true, skip push_warning on outcome mismatch (headless verify / fast-forward).
+var quiet_mismatch := false
 var _events: Array = []
 var _index := 0
 var _expected_score := -1
@@ -96,7 +98,7 @@ func notify_game_over(main: Node) -> void:
 			and int(main.level) == _expected_level
 		)
 	)
-	if not matched:
+	if not matched and not quiet_mismatch:
 		push_warning(
 			"Replay mismatch: got score=%s lines=%s level=%s expected score=%s lines=%s level=%s"
 			% [main.score, main.lines_cleared, main.level, _expected_score, _expected_lines, _expected_level]

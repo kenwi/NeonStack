@@ -17,6 +17,16 @@ static func is_touch_primary() -> bool:
 	return _touch_primary
 
 
+## Pin input class for headless / offline tools before any gameplay reads it.
+static func force_touch_primary(touch_primary: bool) -> void:
+	_checked = true
+	_touch_primary = touch_primary
+
+
+static func force_from_board_id(board_id: String) -> void:
+	force_touch_primary(GameModes.is_mobile_board(board_id))
+
+
 ## Classic-difficulty board for this device. Prefer GameModes.board_id for daily/weekly/hardcore.
 static func score_mode_id() -> String:
 	if is_touch_primary():
