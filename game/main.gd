@@ -2694,7 +2694,7 @@ func _draw_mode_select(vp: Vector2) -> void:
 		)
 		draw_rect(rect, fill, true, -1.0, true)
 		draw_rect(rect, border, false, 2.0 if focused else 1.5, true)
-		var label := "%d  %s" % [i + 1, str(GameModes.FAMILY_LABELS.get(family, family))]
+		var label := str(GameModes.FAMILY_LABELS.get(family, family))
 		var label_w := body_font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, row_size).x
 		var baseline := rect.position.y + (rect.size.y + body_font.get_ascent(row_size) - body_font.get_descent(row_size)) * 0.5
 		draw_string(
