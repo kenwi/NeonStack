@@ -236,6 +236,8 @@ var body_font: Font
 var _touch_close_rect := Rect2()
 var _touch_restart_rect := Rect2()
 var _mode_play_rect := Rect2()
+var _mode_help_rect := Rect2()
+var _mode_scores_rect := Rect2()
 var _replay_close_rect := Rect2()
 var _replay_speed_rect := Rect2()
 var _replay_scrub_back_large_rect := Rect2()
@@ -1553,6 +1555,12 @@ func _handle_mode_select_pointer(point: Vector2) -> bool:
 	if _mode_play_rect.size.x > 0.0 and _mode_play_rect.has_point(point):
 		_activate_mode_select_primary()
 		return true
+	if _mode_help_rect.size.x > 0.0 and _mode_help_rect.has_point(point):
+		_open_help_from_mode_select()
+		return true
+	if _mode_scores_rect.size.x > 0.0 and _mode_scores_rect.has_point(point):
+		_open_leaderboard_from_mode_select()
+		return true
 	return true
 
 
@@ -2432,6 +2440,8 @@ func _sync_touch_overlay_rects() -> void:
 	_touch_close_rect = Rect2()
 	_touch_restart_rect = Rect2()
 	_mode_play_rect = Rect2()
+	_mode_help_rect = Rect2()
+	_mode_scores_rect = Rect2()
 	_mode_choice_rects.clear()
 	_diff_choice_rects.clear()
 	if title_font == null or body_font == null:
@@ -2485,6 +2495,8 @@ func _layout_mode_select(vp: Vector2) -> Dictionary:
 	_mode_choice_rects.clear()
 	_diff_choice_rects.clear()
 	_mode_play_rect = Rect2()
+	_mode_help_rect = Rect2()
+	_mode_scores_rect = Rect2()
 	var title_size_local := help_title_size
 	var row_size := help_row_size
 	var section_size := maxi(11, int(round(float(hint_size) * 0.9)))
@@ -2496,6 +2508,10 @@ func _layout_mode_select(vp: Vector2) -> Dictionary:
 	var choice_h := maxf(44.0, 48.0 * ui_scale)
 	var diff_h := maxf(40.0, 44.0 * ui_scale)
 	var play_h := 48.0
+	## Secondary row (Help / Scores; Options later) sits above the primary CTA.
+	var link_h := maxf(38.0, 42.0 * ui_scale)
+	var link_gap := 8.0 * ui_scale
+	var link_count := 2
 	var title_h := title_font.get_ascent(title_size_local) + title_font.get_descent(title_size_local)
 	var section_h := body_font.get_ascent(section_size) + body_font.get_descent(section_size)
 	var line_h := body_font.get_ascent(hint_size_local) + body_font.get_descent(hint_size_local) + 4.0 * ui_scale
@@ -2525,6 +2541,8 @@ func _layout_mode_select(vp: Vector2) -> Dictionary:
 		+ float(GameModes.FAMILIES.size()) * (choice_h + gap)
 		+ hint_block_h
 		+ 12.0 * ui_scale
+		+ link_h
+		+ 10.0 * ui_scale
 		+ play_h
 		+ footer_h
 		+ pad_bottom
@@ -2553,12 +2571,17 @@ func _layout_mode_select(vp: Vector2) -> Dictionary:
 	var hint_y := y + body_font.get_ascent(hint_size_local)
 	var hint_block_bottom := hint_y + float(maxi(0, hint_lines.size() - 1)) * line_h + body_font.get_descent(hint_size_local)
 	var button_w := minf(180.0, panel.size.x - 24.0)
-	var play_y := hint_block_bottom + 12.0 * ui_scale
-	var play_max_y := panel.end.y - pad_bottom - play_h - footer_h
-	play_y = minf(play_y, play_max_y)
+	var link_y := hint_block_bottom + 12.0 * ui_scale
+	var link_max_y := panel.end.y - pad_bottom - link_h - 10.0 * ui_scale - play_h - footer_h
+	link_y = minf(link_y, link_max_y)
+	var link_row_w := choice_w
+	var link_w := (link_row_w - link_gap * float(link_count - 1)) / float(link_count)
+	var link_x := panel.position.x + pad_x
+	_mode_help_rect = Rect2(link_x, link_y, link_w, link_h)
+	_mode_scores_rect = Rect2(link_x + link_w + link_gap, link_y, link_w, link_h)
 	_mode_play_rect = Rect2(
 		panel.position.x + (panel.size.x - button_w) * 0.5,
-		play_y,
+		_mode_help_rect.end.y + 10.0 * ui_scale,
 		button_w,
 		play_h
 	)
@@ -2695,31 +2718,32 @@ func _draw_mode_select(vp: Vector2) -> void:
 			hint_size_local,
 			ColorTheme.muted()
 		)
+	if _mode_help_rect.size.x > 0.0:
+		_draw_overlay_button(_mode_help_rect, "HELP")
+	if _mode_scores_rect.size.x > 0.0:
+		_draw_overlay_button(_mode_scores_rect, "SCORES")
 	if _mode_play_rect.size.x > 0.0:
 		_draw_overlay_button(_mode_play_rect, _mode_select_primary_label())
 	if footer_h > 0.0:
 		var footer := ""
 		if PlayDevice.is_touch_primary():
-			footer = (
-				"Help / Scores buttons  Esc resume"
-				if _menu_can_resume
-				else "Help / Scores buttons"
-			)
+			footer = "Esc resume" if _menu_can_resume else ""
 		elif _menu_can_resume:
 			footer = "H help  L scores  Esc resume  Enter"
 		else:
 			footer = "H help  L scores  1-3 mode  Enter start"
-		var footer_w := body_font.get_string_size(footer, HORIZONTAL_ALIGNMENT_LEFT, -1, hint_size).x
-		var footer_y := panel.end.y - pad_bottom + body_font.get_ascent(hint_size) - footer_h + 4.0 * ui_scale
-		draw_string(
-			body_font,
-			Vector2(panel.position.x + (panel.size.x - footer_w) * 0.5, footer_y),
-			footer,
-			HORIZONTAL_ALIGNMENT_LEFT,
-			-1,
-			hint_size,
-			ColorTheme.muted()
-		)
+		if not footer.is_empty():
+			var footer_w := body_font.get_string_size(footer, HORIZONTAL_ALIGNMENT_LEFT, -1, hint_size).x
+			var footer_y := panel.end.y - pad_bottom + body_font.get_ascent(hint_size) - footer_h + 4.0 * ui_scale
+			draw_string(
+				body_font,
+				Vector2(panel.position.x + (panel.size.x - footer_w) * 0.5, footer_y),
+				footer,
+				HORIZONTAL_ALIGNMENT_LEFT,
+				-1,
+				hint_size,
+				ColorTheme.muted()
+			)
 
 
 func _draw_overlays(vp: Vector2) -> void:
