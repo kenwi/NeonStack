@@ -530,6 +530,56 @@ func _open_mode_select_menu() -> void:
 	queue_redraw()
 
 
+func _return_from_overlay_to_mode_select() -> void:
+	## Help / leaderboard Esc (and close) always lands back on the mode menu.
+	help_open = false
+	score_open = false
+	paused = false
+	if highscores != null and highscores.is_showing_overlay() and not highscores.is_capturing_input():
+		highscores.close_overlay()
+	if not _menu_can_resume:
+		_menu_can_resume = (
+			not game_mode.is_empty()
+			and not game_over
+			and not replay_mode
+		)
+	mode_select_open = true
+	_sync_hold_flags_from_input()
+	queue_redraw()
+
+
+func _open_help_from_mode_select() -> void:
+	mode_select_open = false
+	help_open = true
+	score_open = false
+	if highscores != null:
+		highscores.close_overlay()
+	queue_redraw()
+
+
+func _open_leaderboard_from_mode_select() -> void:
+	mode_select_open = false
+	help_open = false
+	score_open = false
+	if highscores == null:
+		return
+	var family := _mode_family_at(_mode_pick_index)
+	var diff := _difficulty_at(_diff_pick_index)
+	if highscores.has_method("open_leaderboard_view"):
+		highscores.open_leaderboard_view(family, diff)
+	else:
+		highscores.open_leaderboard()
+	queue_redraw()
+
+
+func _on_leaderboard_closed() -> void:
+	if mode_select_open or help_open or score_open:
+		return
+	if highscores != null and highscores.is_capturing_input():
+		return
+	_return_from_overlay_to_mode_select()
+
+
 func _close_mode_select_to_game() -> bool:
 	## Resume the suspended run without restarting.
 	if not mode_select_open or not _menu_can_resume:
@@ -1404,8 +1454,7 @@ func _handle_touch_overlay(event: InputEvent) -> bool:
 	if _touch_close_rect.size.x > 0.0 and _touch_close_rect.has_point(point):
 		_dismiss_help()
 		score_open = false
-		_open_mode_select_if_needed()
-		_sync_hold_flags_from_input()
+		_return_from_overlay_to_mode_select()
 		if touch != null:
 			touch.suppress_play_taps()
 		queue_redraw()
@@ -1420,8 +1469,7 @@ func _handle_touch_overlay(event: InputEvent) -> bool:
 			touch.suppress_play_taps()
 		_dismiss_help()
 		score_open = false
-		_open_mode_select_if_needed()
-		_sync_hold_flags_from_input()
+		_return_from_overlay_to_mode_select()
 		queue_redraw()
 		return true
 	if PlayDevice.is_touch_primary() and mode_select_open:
@@ -1511,6 +1559,12 @@ func _handle_mode_select_keys(event: InputEvent) -> bool:
 		_mode_focus_row = 1
 		queue_redraw()
 		return true
+	if _key_pressed(event, KEY_H):
+		_open_help_from_mode_select()
+		return true
+	if _key_pressed(event, KEY_L):
+		_open_leaderboard_from_mode_select()
+		return true
 	if (
 		_key_pressed(event, KEY_SPACE)
 		or _key_pressed(event, KEY_ENTER)
@@ -1518,7 +1572,7 @@ func _handle_mode_select_keys(event: InputEvent) -> bool:
 	):
 		_activate_mode_select_primary()
 		return true
-	return true
+	return false
 
 
 func _input(event: InputEvent) -> void:
@@ -1554,29 +1608,32 @@ func _input(event: InputEvent) -> void:
 	if _key_pressed(event, KEY_H):
 		if help_open:
 			_dismiss_help()
-			_open_mode_select_if_needed()
-			_sync_hold_flags_from_input()
+			_return_from_overlay_to_mode_select()
+		elif mode_select_open:
+			_open_help_from_mode_select()
 		else:
 			help_open = true
 			score_open = false
 			mode_select_open = false
 			if highscores != null:
 				highscores.close_overlay()
-		queue_redraw()
+			queue_redraw()
 		get_viewport().set_input_as_handled()
 		return
 	if _key_pressed(event, KEY_S):
 		if mode_select_open or _awaiting_mode():
 			get_viewport().set_input_as_handled()
 			return
-		score_open = not score_open
 		if score_open:
+			score_open = false
+			_return_from_overlay_to_mode_select()
+		else:
+			score_open = true
 			_dismiss_help()
+			mode_select_open = false
 			if highscores != null:
 				highscores.close_overlay()
-		else:
-			_sync_hold_flags_from_input()
-		queue_redraw()
+			queue_redraw()
 		get_viewport().set_input_as_handled()
 		return
 	if _key_pressed(event, KEY_F) or _key_pressed(event, KEY_F11):
@@ -1632,14 +1689,13 @@ func _input(event: InputEvent) -> void:
 		if help_open or score_open:
 			_dismiss_help()
 			score_open = false
-			if _awaiting_mode():
-				_open_mode_select_if_needed()
-			else:
-				_open_mode_select_menu()
-			_sync_hold_flags_from_input()
+			_return_from_overlay_to_mode_select()
 		elif _highscores_open() and highscores != null and not highscores.is_capturing_input():
-			highscores.close_overlay()
-			_sync_hold_flags_from_input()
+			if highscores.has_method("_close_leaderboard_for_user"):
+				highscores._close_leaderboard_for_user()
+			else:
+				highscores.close_overlay()
+				_return_from_overlay_to_mode_select()
 		elif DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_FULLSCREEN \
 			or DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN:
 			DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
@@ -1679,8 +1735,7 @@ func _input(event: InputEvent) -> void:
 		or _key_pressed(event, KEY_KP_ENTER)
 	):
 		_dismiss_help()
-		_open_mode_select_if_needed()
-		_sync_hold_flags_from_input()
+		_return_from_overlay_to_mode_select()
 		queue_redraw()
 		get_viewport().set_input_as_handled()
 		return
@@ -2405,6 +2460,16 @@ func _layout_mode_select(vp: Vector2) -> Dictionary:
 		hint_size_local,
 		hint_max_w
 	)
+	var nav_hint := (
+		"H help · L leaderboard · Esc resumes"
+		if _menu_can_resume
+		else "H help · L leaderboard"
+	)
+	if PlayDevice.is_touch_primary():
+		nav_hint = "Help / Scores buttons · Esc resumes" if _menu_can_resume else "Help / Scores buttons"
+	var nav_lines := _wrap_text_lines(nav_hint, body_font, hint_size_local, hint_max_w)
+	for nav_line in nav_lines:
+		hint_lines.append(str(nav_line))
 	var hint_block_h := line_h * float(maxi(1, hint_lines.size()))
 	var panel_h := (
 		pad_top
@@ -2593,9 +2658,9 @@ func _draw_mode_select(vp: Vector2) -> void:
 		_draw_overlay_button(_mode_play_rect, _mode_select_primary_label())
 	if footer_h > 0.0:
 		var footer := (
-			"Esc resume  1-3 mode  [ ] difficulty  Enter"
+			"H help  L scores  Esc resume  Enter"
 			if _menu_can_resume
-			else "1-3 mode  [ ] difficulty  Enter start"
+			else "H help  L scores  1-3 mode  Enter start"
 		)
 		var footer_w := body_font.get_string_size(footer, HORIZONTAL_ALIGNMENT_LEFT, -1, hint_size).x
 		var footer_y := panel.end.y - pad_bottom + body_font.get_ascent(hint_size) - footer_h + 4.0 * ui_scale
@@ -2613,15 +2678,10 @@ func _draw_mode_select(vp: Vector2) -> void:
 func _draw_overlays(vp: Vector2) -> void:
 	_sync_touch_overlay_rects()
 	if score_open:
-		_draw_info_table(vp, "SCORE", SCORE_HELP_ROWS, "S or Esc to close")
+		_draw_info_table(vp, "SCORE", SCORE_HELP_ROWS, "S or Esc back to mode menu")
 		return
 	if help_open:
-		var help_footer := (
-			"Space / Enter / Esc to continue"
-			if _awaiting_mode()
-			else "Space / Enter / Esc to close"
-		)
-		_draw_info_table(vp, "CONTROLS", _help_rows(), help_footer)
+		_draw_info_table(vp, "CONTROLS", _help_rows(), "Space / Enter / Esc back to mode menu")
 		return
 	if mode_select_open:
 		_draw_mode_select(vp)

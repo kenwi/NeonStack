@@ -202,6 +202,29 @@ func open_leaderboard() -> void:
 	queue_redraw()
 
 
+func open_leaderboard_view(
+	game_mode: String,
+	difficulty: String = GameModes.DIFFICULTY_CLASSIC,
+	unix_utc: int = -1
+) -> void:
+	## Browse a board without changing the active submit mode for the current run.
+	if is_capturing_input():
+		return
+	if not GameModes.is_valid_family(game_mode):
+		open_leaderboard()
+		return
+	var diff := difficulty if GameModes.is_valid_difficulty(difficulty) else GameModes.DIFFICULTY_CLASSIC
+	if unix_utc < 0:
+		unix_utc = GameModes.utc_now_unix()
+	view_mode_id = GameModes.board_id(game_mode, PlayDevice.is_touch_primary(), unix_utc, diff)
+	_sync_view_from_board_id(view_mode_id)
+	leaderboard_open = true
+	leaderboard_page = 0
+	phase = Phase.LEADERBOARD
+	_fetch_leaderboard()
+	queue_redraw()
+
+
 func _sync_view_from_board_id(board_id: String) -> void:
 	_view_family = GameModes.family_from_board_id(board_id)
 	_view_difficulty = GameModes.difficulty_from_board_id(board_id)
@@ -371,16 +394,26 @@ func handle_input(event: InputEvent) -> bool:
 
 	if _key_pressed(event, KEY_L) and not is_capturing_input():
 		if leaderboard_open or phase == Phase.LEADERBOARD:
-			leaderboard_open = false
-			if not _is_game_over_context():
-				phase = Phase.IDLE
-			_sync_parent_holds()
-			queue_redraw()
+			_close_leaderboard_for_user()
 		else:
 			open_leaderboard()
 		return true
 
 	return false
+
+
+func _close_leaderboard_for_user() -> void:
+	leaderboard_open = false
+	if not _is_game_over_context():
+		phase = Phase.IDLE
+	elif phase == Phase.LEADERBOARD:
+		phase = Phase.IDLE
+	_suppress_touch_zones()
+	_sync_parent_holds()
+	queue_redraw()
+	var main := get_parent()
+	if main != null and main.has_method("_on_leaderboard_closed"):
+		main._on_leaderboard_closed()
 
 
 func _sync_parent_holds() -> void:
@@ -528,14 +561,7 @@ func _handle_leaderboard_pointer(event: InputEvent) -> bool:
 			_set_leaderboard_page(int(page_target.page))
 			return true
 	if _lb_close_rect.size.x > 0.0 and _lb_close_rect.has_point(point):
-		leaderboard_open = false
-		if _is_game_over_context():
-			phase = Phase.IDLE
-		elif phase == Phase.LEADERBOARD:
-			phase = Phase.IDLE
-		_suppress_touch_zones()
-		_sync_parent_holds()
-		queue_redraw()
+		_close_leaderboard_for_user()
 		return true
 	if _lb_restart_rect.size.x > 0.0 and _lb_restart_rect.has_point(point):
 		get_parent()._new_game()

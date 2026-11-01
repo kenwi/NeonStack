@@ -270,13 +270,17 @@ func _on_press(id: String) -> void:
 			main.highscores.close_overlay()
 		main.queue_redraw()
 	elif id == "scores":
-		if str(main.get("game_mode")) == "" or main.mode_select_open:
+		if main.mode_select_open and main.has_method("_open_leaderboard_from_mode_select"):
+			main._open_leaderboard_from_mode_select()
+			return
+		if str(main.get("game_mode")) == "":
 			return
 		if main.has_method("_dismiss_help"):
 			main._dismiss_help()
 		else:
 			main.help_open = false
 		main.score_open = false
+		main.mode_select_open = false
 		if main.highscores != null:
 			main.highscores.open_leaderboard()
 		main.queue_redraw()
