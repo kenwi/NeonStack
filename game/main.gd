@@ -2485,7 +2485,6 @@ func _layout_mode_select(vp: Vector2) -> Dictionary:
 	_mode_choice_rects.clear()
 	_diff_choice_rects.clear()
 	_mode_play_rect = Rect2()
-	var touch_ui := PlayDevice.is_touch_primary()
 	var title_size_local := help_title_size
 	var row_size := help_row_size
 	var section_size := maxi(11, int(round(float(hint_size) * 0.9)))
@@ -2500,10 +2499,7 @@ func _layout_mode_select(vp: Vector2) -> Dictionary:
 	var title_h := title_font.get_ascent(title_size_local) + title_font.get_descent(title_size_local)
 	var section_h := body_font.get_ascent(section_size) + body_font.get_descent(section_size)
 	var line_h := body_font.get_ascent(hint_size_local) + body_font.get_descent(hint_size_local) + 4.0 * ui_scale
-	var footer_h := (
-		0.0 if touch_ui
-		else body_font.get_ascent(hint_size) + body_font.get_descent(hint_size) + 8.0 * ui_scale
-	)
+	var footer_h := body_font.get_ascent(hint_size) + body_font.get_descent(hint_size) + 8.0 * ui_scale
 	var panel_w := minf(440.0 * ui_scale, vp.x - 16.0)
 	var hint_max_w := panel_w - pad_x * 2.0
 	var hint_lines := _wrap_text_lines(
@@ -2515,16 +2511,6 @@ func _layout_mode_select(vp: Vector2) -> Dictionary:
 		hint_size_local,
 		hint_max_w
 	)
-	var nav_hint := (
-		"H help · L leaderboard · Esc resumes"
-		if _menu_can_resume
-		else "H help · L leaderboard"
-	)
-	if PlayDevice.is_touch_primary():
-		nav_hint = "Help / Scores buttons · Esc resumes" if _menu_can_resume else "Help / Scores buttons"
-	var nav_lines := _wrap_text_lines(nav_hint, body_font, hint_size_local, hint_max_w)
-	for nav_line in nav_lines:
-		hint_lines.append(str(nav_line))
 	var hint_block_h := line_h * float(maxi(1, hint_lines.size()))
 	var panel_h := (
 		pad_top
@@ -2712,11 +2698,17 @@ func _draw_mode_select(vp: Vector2) -> void:
 	if _mode_play_rect.size.x > 0.0:
 		_draw_overlay_button(_mode_play_rect, _mode_select_primary_label())
 	if footer_h > 0.0:
-		var footer := (
-			"H help  L scores  Esc resume  Enter"
-			if _menu_can_resume
-			else "H help  L scores  1-3 mode  Enter start"
-		)
+		var footer := ""
+		if PlayDevice.is_touch_primary():
+			footer = (
+				"Help / Scores buttons  Esc resume"
+				if _menu_can_resume
+				else "Help / Scores buttons"
+			)
+		elif _menu_can_resume:
+			footer = "H help  L scores  Esc resume  Enter"
+		else:
+			footer = "H help  L scores  1-3 mode  Enter start"
 		var footer_w := body_font.get_string_size(footer, HORIZONTAL_ALIGNMENT_LEFT, -1, hint_size).x
 		var footer_y := panel.end.y - pad_bottom + body_font.get_ascent(hint_size) - footer_h + 4.0 * ui_scale
 		draw_string(
