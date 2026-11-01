@@ -15,6 +15,7 @@ const VOLUME_STEPS := 10
 const DEFAULT_STEP := 7
 const STATUS_TIME := 1.8
 const STATUS_FADE := 0.35
+const CONFIG_PATH := "user://music.cfg"
 
 var _tracks: Array[Dictionary] = []
 var _player := AudioStreamPlayer.new()
@@ -48,6 +49,7 @@ func _ready() -> void:
 	_web_samples = OS.has_feature("web")
 	_player.finished.connect(_on_finished)
 	add_child(_player)
+	_load_volume_prefs()
 	_tracks = TRACK_PATHS.duplicate(true)
 	_shuffle_tracks()
 	_prefetch_all()
@@ -91,6 +93,7 @@ func skip_track() -> void:
 func _toggle_mute() -> void:
 	_muted = not _muted
 	_apply_volume()
+	_save_volume_prefs()
 	if _muted:
 		_show("Music muted")
 	else:
@@ -101,6 +104,7 @@ func _change_volume(direction: int) -> void:
 	_volume_step = clampi(_volume_step + direction, 0, VOLUME_STEPS)
 	_muted = false
 	_apply_volume()
+	_save_volume_prefs()
 	_show("Music %d%%" % (_volume_step * 10))
 
 
@@ -339,6 +343,23 @@ func _apply_volume() -> void:
 		_player.volume_db = -80.0
 	else:
 		_player.volume_db = linear_to_db(float(_volume_step) / float(VOLUME_STEPS))
+
+
+func _load_volume_prefs() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(CONFIG_PATH) != OK:
+		return
+	_volume_step = clampi(int(cfg.get_value("music", "volume_step", DEFAULT_STEP)), 0, VOLUME_STEPS)
+	_muted = bool(cfg.get_value("music", "muted", false))
+	_apply_volume()
+
+
+func _save_volume_prefs() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(CONFIG_PATH)
+	cfg.set_value("music", "volume_step", _volume_step)
+	cfg.set_value("music", "muted", _muted)
+	cfg.save(CONFIG_PATH)
 
 
 func _toast_bottom_inset() -> float:

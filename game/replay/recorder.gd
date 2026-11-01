@@ -33,8 +33,15 @@ func record(tick: int, action: String) -> void:
 
 
 func export_dict(main: Node) -> Dictionary:
+	var mode_id := PlayDevice.score_mode_id()
+	var highscores = main.get("highscores")
+	if highscores != null and str(highscores.get("submit_mode_id")) != "":
+		mode_id = str(highscores.submit_mode_id)
+	elif main.get("game_mode") != null and str(main.game_mode) != "":
+		var diff := str(main.get("difficulty"))
+		mode_id = PlayDevice.score_mode_id_for(str(main.game_mode), -1, diff)
 	return ReplayFormat.build(
-		PlayDevice.score_mode_id(),
+		mode_id,
 		seed_value,
 		events.duplicate(true),
 		int(main.score),

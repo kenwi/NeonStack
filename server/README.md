@@ -29,19 +29,23 @@ API:
 
 - `GET  http://localhost:5090/api/scores/classic?top=10`
 - `GET  http://localhost:5090/api/scores/classic-mobile?top=10`
+- `GET  http://localhost:5090/api/scores/hardcore?top=10`
 - `GET  http://localhost:5090/api/scores/daily-2026-10-31?top=10`
-- `GET  http://localhost:5090/api/scores/weekly-2026-W44-mobile?top=10`
+- `GET  http://localhost:5090/api/scores/hardcore-weekly-2026-W44-mobile?top=10`
 - `POST http://localhost:5090/api/scores`
 
-Game modes:
+Game modes (classic difficulty keeps the legacy ids):
 
-| Mode | Desktop `modeId` | Mobile `modeId` | Seed |
-|------|------------------|-----------------|------|
-| Classic | `classic` | `classic-mobile` | Random each run |
-| Daily | `daily-YYYY-MM-DD` | `daily-YYYY-MM-DD-mobile` | Shared UTC day |
-| Weekly | `weekly-YYYY-Www` | `weekly-YYYY-Www-mobile` | Shared ISO week (Monday UTC) |
+| Mode | Difficulty | Desktop `modeId` | Mobile `modeId` | Seed |
+|------|------------|------------------|-----------------|------|
+| Classic | Classic (Infinity lock resets) | `classic` | `classic-mobile` | Random each run |
+| Classic | Hardcore (no lock resets) | `hardcore` | `hardcore-mobile` | Random each run |
+| Daily | Classic | `daily-YYYY-MM-DD` | `daily-YYYY-MM-DD-mobile` | Shared UTC day |
+| Daily | Hardcore | `hardcore-daily-YYYY-MM-DD` | `hardcore-daily-YYYY-MM-DD-mobile` | Shared UTC day |
+| Weekly | Classic | `weekly-YYYY-Www` | `weekly-YYYY-Www-mobile` | Shared ISO week (Monday UTC) |
+| Weekly | Hardcore | `hardcore-weekly-YYYY-Www` | `hardcore-weekly-YYYY-Www-mobile` | Shared ISO week (Monday UTC) |
 
-Each period has its own board (desktop and mobile separated). The checksum includes the mode id. Existing classic scores stay on the classic boards.
+Each period and difficulty has its own board (desktop and mobile separated). The checksum includes the mode id. Existing classic-difficulty scores stay on the classic / daily / weekly boards.
 
 ### Submit body
 

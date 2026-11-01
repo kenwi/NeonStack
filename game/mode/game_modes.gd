@@ -1,10 +1,15 @@
 extends RefCounted
 
-## Classic / daily / weekly board ids and shared UTC period seeds.
+## Classic / daily / weekly board ids, difficulty, and shared UTC period seeds.
+## Classic difficulty keeps legacy board ids (classic, daily-*, weekly-*).
+## Hardcore prefixes those ids (hardcore, hardcore-daily-*, hardcore-weekly-*).
 
 const CLASSIC := "classic"
 const DAILY := "daily"
 const WEEKLY := "weekly"
+
+const DIFFICULTY_CLASSIC := "classic"
+const DIFFICULTY_HARDCORE := "hardcore"
 
 const FAMILIES: Array[String] = [CLASSIC, DAILY, WEEKLY]
 const FAMILY_LABELS := {
@@ -13,38 +18,66 @@ const FAMILY_LABELS := {
 	WEEKLY: "Weekly",
 }
 
+const DIFFICULTIES: Array[String] = [DIFFICULTY_CLASSIC, DIFFICULTY_HARDCORE]
+const DIFFICULTY_LABELS := {
+	DIFFICULTY_CLASSIC: "Classic",
+	DIFFICULTY_HARDCORE: "Hardcore",
+}
+
 
 static func is_valid_family(game_mode: String) -> bool:
 	return game_mode == CLASSIC or game_mode == DAILY or game_mode == WEEKLY
+
+
+static func is_valid_difficulty(difficulty: String) -> bool:
+	return difficulty == DIFFICULTY_CLASSIC or difficulty == DIFFICULTY_HARDCORE
+
+
+static func lock_resets_enabled(difficulty: String) -> bool:
+	return difficulty != DIFFICULTY_HARDCORE
 
 
 static func utc_now_unix() -> int:
 	return int(Time.get_unix_time_from_system())
 
 
-static func period_key(game_mode: String, unix_utc: int = -1) -> String:
+static func period_key(
+	game_mode: String,
+	unix_utc: int = -1,
+	difficulty: String = DIFFICULTY_CLASSIC
+) -> String:
 	if unix_utc < 0:
 		unix_utc = utc_now_unix()
+	var base := CLASSIC
 	if game_mode == DAILY:
-		return "daily-%s" % _format_date_utc(unix_utc)
-	if game_mode == WEEKLY:
+		base = "daily-%s" % _format_date_utc(unix_utc)
+	elif game_mode == WEEKLY:
 		var parts := iso_week_parts(unix_utc)
-		return "weekly-%d-W%02d" % [parts.x, parts.y]
-	return CLASSIC
+		base = "weekly-%d-W%02d" % [parts.x, parts.y]
+	if difficulty == DIFFICULTY_HARDCORE:
+		if game_mode == CLASSIC:
+			return DIFFICULTY_HARDCORE
+		return "%s-%s" % [DIFFICULTY_HARDCORE, base]
+	return base
 
 
-static func board_id(game_mode: String, touch_primary: bool, unix_utc: int = -1) -> String:
-	var key := period_key(game_mode, unix_utc)
+static func board_id(
+	game_mode: String,
+	touch_primary: bool,
+	unix_utc: int = -1,
+	difficulty: String = DIFFICULTY_CLASSIC
+) -> String:
+	var key := period_key(game_mode, unix_utc, difficulty)
 	if touch_primary:
 		return "%s-mobile" % key
 	return key
 
 
 static func period_seed(game_mode: String, unix_utc: int = -1) -> int:
-	## Shared across desktop and mobile for the same UTC period.
+	## Shared across desktop/mobile and classic/hardcore for the same UTC period.
 	if game_mode != DAILY and game_mode != WEEKLY:
 		return 0
-	var key := period_key(game_mode, unix_utc)
+	var key := period_key(game_mode, unix_utc, DIFFICULTY_CLASSIC)
 	var h := hash("neonstack|%s" % key) & 0x7FFFFFFF
 	return h if h != 0 else 1
 
@@ -72,10 +105,31 @@ static func shift_period_unix(game_mode: String, unix_utc: int, delta_periods: i
 	return unix_utc
 
 
+static func _core_board_id(board_id: String) -> String:
+	return board_id.trim_suffix("-mobile")
+
+
+static func difficulty_from_board_id(board_id: String) -> String:
+	var core := _core_board_id(board_id)
+	if core == DIFFICULTY_HARDCORE or core.begins_with("%s-" % DIFFICULTY_HARDCORE):
+		return DIFFICULTY_HARDCORE
+	return DIFFICULTY_CLASSIC
+
+
+static func _family_core(board_id: String) -> String:
+	var core := _core_board_id(board_id)
+	if core == DIFFICULTY_HARDCORE:
+		return CLASSIC
+	if core.begins_with("%s-" % DIFFICULTY_HARDCORE):
+		return core.substr(DIFFICULTY_HARDCORE.length() + 1)
+	return core
+
+
 static func family_from_board_id(board_id: String) -> String:
-	if board_id.begins_with("daily"):
+	var core := _family_core(board_id)
+	if core.begins_with("daily"):
 		return DAILY
-	if board_id.begins_with("weekly"):
+	if core.begins_with("weekly"):
 		return WEEKLY
 	return CLASSIC
 
@@ -85,8 +139,8 @@ static func is_mobile_board(board_id: String) -> bool:
 
 
 static func period_unix_from_board_id(board_id: String) -> int:
-	var core := board_id.trim_suffix("-mobile")
-	var family := family_from_board_id(core)
+	var core := _family_core(board_id)
+	var family := family_from_board_id(board_id)
 	if family == DAILY and core.length() > 6:
 		var date := core.substr(6) # after "daily-"
 		var parts := date.split("-")
@@ -128,9 +182,15 @@ static func unix_from_iso_week(year: int, week: int) -> int:
 static func board_title(board_id: String) -> String:
 	var family := family_from_board_id(board_id)
 	var mobile := is_mobile_board(board_id)
+	var hardcore := difficulty_from_board_id(board_id) == DIFFICULTY_HARDCORE
 	if family == CLASSIC:
+		if hardcore:
+			return "HARDCORE MOBILE HIGHSCORES" if mobile else "HARDCORE HIGHSCORES"
+		# Legacy classic difficulty titles stay unchanged.
 		return "MOBILE HIGHSCORES" if mobile else "HIGHSCORES"
 	var label := str(FAMILY_LABELS.get(family, family)).to_upper()
+	if hardcore:
+		label = "HARDCORE %s" % label
 	if mobile:
 		return "%s MOBILE HIGHSCORES" % label
 	return "%s HIGHSCORES" % label
@@ -142,6 +202,16 @@ static func hint_for_family(game_mode: String) -> String:
 	if game_mode == WEEKLY:
 		return "Same piece sequence all week (UTC). New seed every Monday."
 	return "Random seed each run. Compete on the classic board."
+
+
+static func hint_for_difficulty(difficulty: String) -> String:
+	if difficulty == DIFFICULTY_HARDCORE:
+		return "Lock delay never resets on move or rotate."
+	return "Lock delay resets on move/rotate (Infinity-style, up to 15)."
+
+
+static func hint_for_selection(game_mode: String, difficulty: String) -> String:
+	return "%s %s" % [hint_for_family(game_mode), hint_for_difficulty(difficulty)]
 
 
 ## ISO-8601 week year and week number (Monday start). Returns Vector2i(year, week).

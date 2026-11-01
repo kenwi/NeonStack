@@ -153,6 +153,11 @@ public sealed class DiscordScoreAnnouncer
         var mobile = modeId.EndsWith("-mobile", StringComparison.Ordinal);
         var core = mobile ? modeId[..^"-mobile".Length] : modeId;
 
+        var hardcore = core == "hardcore"
+            || core.StartsWith("hardcore-", StringComparison.Ordinal);
+        if (hardcore)
+            core = core == "hardcore" ? "classic" : core["hardcore-".Length..];
+
         var label = core switch
         {
             "classic" => "Classic",
@@ -160,6 +165,9 @@ public sealed class DiscordScoreAnnouncer
             _ when core.StartsWith("weekly-", StringComparison.Ordinal) => $"Weekly {core["weekly-".Length..]}",
             _ => core,
         };
+
+        if (hardcore)
+            label = $"Hardcore {label}";
 
         return mobile ? $"{label} (Mobile)" : label;
     }

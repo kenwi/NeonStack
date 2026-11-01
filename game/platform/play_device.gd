@@ -17,17 +17,22 @@ static func is_touch_primary() -> bool:
 	return _touch_primary
 
 
-## Classic board for this device. Prefer GameModes.board_id for daily/weekly.
+## Classic-difficulty board for this device. Prefer GameModes.board_id for daily/weekly/hardcore.
 static func score_mode_id() -> String:
 	if is_touch_primary():
 		return HighscoreConfig.MODE_ID_MOBILE
 	return HighscoreConfig.MODE_ID
 
 
-static func score_mode_id_for(game_mode: String, unix_utc: int = -1) -> String:
+static func score_mode_id_for(
+	game_mode: String,
+	unix_utc: int = -1,
+	difficulty: String = GameModes.DIFFICULTY_CLASSIC
+) -> String:
 	if not GameModes.is_valid_family(game_mode):
 		return score_mode_id()
-	return GameModes.board_id(game_mode, is_touch_primary(), unix_utc)
+	var diff := difficulty if GameModes.is_valid_difficulty(difficulty) else GameModes.DIFFICULTY_CLASSIC
+	return GameModes.board_id(game_mode, is_touch_primary(), unix_utc, diff)
 
 
 static func pointer_down_position(event: InputEvent) -> Vector2:

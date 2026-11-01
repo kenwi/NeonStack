@@ -44,7 +44,7 @@ const HELP_KEYS := [
 	["M", "Mute music"],
 	["N", "Next track"],
 	["PgUp / PgDn", "Music volume"],
-	["Esc", "Pause / stop replay"],
+	["Esc", "Mode menu / resume"],
 	["R", "Restart"],
 	["L", "Highscores"],
 	["F / F11", "Fullscreen"],
@@ -161,10 +161,17 @@ var paused := false
 var help_open := false
 var score_open := false
 var mode_select_open := false
+## True when Esc opened the menu over a live run that can be resumed.
+var _menu_can_resume := false
 ## Empty until the player picks Classic / Daily / Weekly.
 var game_mode := ""
+## Classic = Infinity lock resets; Hardcore = lock delay never resets.
+var difficulty := GameModes.DIFFICULTY_CLASSIC
 var _mode_pick_index := 0
+var _diff_pick_index := 0
+var _mode_focus_row := 0 # 0 = difficulty (top), 1 = mode family
 var _mode_choice_rects: Array = []
+var _diff_choice_rects: Array = []
 ## Web only: hide the first-run controls overlay after the player has seen it once.
 var _help_seen := false
 
@@ -279,7 +286,7 @@ func _ready() -> void:
 	_load_help_seen()
 	_layout()
 	_new_game()
-	# First-run help, then mode picker. Web remembers help was seen in user:// (browser storage).
+	# First-run help, then mode picker. Help-seen is stored in user:// (web + native).
 	var show_help := _should_show_startup_help()
 	help_open = show_help
 	mode_select_open = not show_help
@@ -446,7 +453,7 @@ func _new_game(seed_override: int = -1) -> void:
 	bag_rng.seed = run_seed
 	if highscores != null and not replay_mode:
 		if not game_mode.is_empty() and highscores.has_method("set_game_mode"):
-			highscores.set_game_mode(game_mode)
+			highscores.set_game_mode(game_mode, -1, difficulty)
 		highscores.reset_run()
 		highscores.refresh_live_ranks()
 	if juice != null:
@@ -479,18 +486,86 @@ func _overlay_blocks_play() -> bool:
 
 func _open_mode_select_if_needed() -> void:
 	if _awaiting_mode() and not help_open and not score_open:
+		_menu_can_resume = false
+		_sync_mode_select_picks_from_run()
 		mode_select_open = true
 
 
-func _confirm_game_mode(mode: String) -> void:
+func _sync_mode_select_picks_from_run() -> void:
+	if not game_mode.is_empty():
+		var family_i := GameModes.FAMILIES.find(game_mode)
+		if family_i >= 0:
+			_mode_pick_index = family_i
+	_diff_pick_index = 1 if difficulty == GameModes.DIFFICULTY_HARDCORE else 0
+
+
+func _mode_select_picks_match_run() -> bool:
+	if game_mode.is_empty():
+		return false
+	return (
+		_mode_family_at(_mode_pick_index) == game_mode
+		and _difficulty_at(_diff_pick_index) == difficulty
+	)
+
+
+func _mode_select_primary_label() -> String:
+	if _menu_can_resume and _mode_select_picks_match_run():
+		return "RESUME"
+	return "START"
+
+
+func _open_mode_select_menu() -> void:
+	help_open = false
+	score_open = false
+	paused = false
+	if highscores != null and highscores.is_showing_overlay() and not highscores.is_capturing_input():
+		highscores.close_overlay()
+	_menu_can_resume = (
+		not game_mode.is_empty()
+		and not game_over
+		and not replay_mode
+	)
+	_sync_mode_select_picks_from_run()
+	mode_select_open = true
+	queue_redraw()
+
+
+func _close_mode_select_to_game() -> bool:
+	## Resume the suspended run without restarting.
+	if not mode_select_open or not _menu_can_resume:
+		return false
+	mode_select_open = false
+	_menu_can_resume = false
+	paused = false
+	_sync_hold_flags_from_input()
+	if touch != null:
+		touch.suppress_play_taps(400)
+	queue_redraw()
+	return true
+
+
+func _activate_mode_select_primary() -> void:
+	if _menu_can_resume and _mode_select_picks_match_run():
+		_close_mode_select_to_game()
+		return
+	_confirm_game_mode(_mode_family_at(_mode_pick_index))
+
+
+func _confirm_game_mode(mode: String, diff: String = "") -> void:
 	if not GameModes.is_valid_family(mode):
 		return
+	if diff.is_empty():
+		diff = _difficulty_at(_diff_pick_index)
+	if not GameModes.is_valid_difficulty(diff):
+		diff = GameModes.DIFFICULTY_CLASSIC
 	game_mode = mode
+	difficulty = diff
 	mode_select_open = false
+	_menu_can_resume = false
 	help_open = false
 	score_open = false
 	if highscores != null and highscores.has_method("set_game_mode"):
-		highscores.set_game_mode(game_mode)
+		highscores.set_game_mode(game_mode, -1, difficulty)
 	_new_game()
 	_sync_hold_flags_from_input()
 	if touch != null:
@@ -501,6 +576,11 @@ func _confirm_game_mode(mode: String) -> void:
 func _mode_family_at(index: int) -> String:
 	var i := clampi(index, 0, GameModes.FAMILIES.size() - 1)
 	return GameModes.FAMILIES[i]
+
+
+func _difficulty_at(index: int) -> String:
+	var i := clampi(index, 0, GameModes.DIFFICULTIES.size() - 1)
+	return GameModes.DIFFICULTIES[i]
 
 
 func _refill_bag() -> void:
@@ -585,6 +665,8 @@ func _try_rotate(dir: int) -> void:
 
 
 func _bump_lock() -> void:
+	if not GameModes.lock_resets_enabled(difficulty):
+		return
 	if _grounded():
 		if lock_resets < 15:
 			lock_timer = 0.0
@@ -715,18 +797,15 @@ func _save_backdrop_prefs() -> void:
 
 
 func _should_show_startup_help() -> bool:
-	# Native desktop: always show controls on launch.
-	# Native touch: skip (close tap must not hard-drop).
-	# Web: show once, then skip on later visits (desktop and mobile).
-	if OS.has_feature("web"):
-		return not _help_seen
-	return not PlayDevice.is_touch_primary()
+	# Touch: skip first-run overlay (close tap must not hard-drop).
+	# Desktop (web + native): show once, then remember in user://.
+	if PlayDevice.is_touch_primary():
+		return false
+	return not _help_seen
 
 
 func _load_help_seen() -> void:
 	_help_seen = false
-	if not OS.has_feature("web"):
-		return
 	var cfg := ConfigFile.new()
 	if cfg.load(UI_CONFIG_PATH) != OK:
 		return
@@ -734,7 +813,7 @@ func _load_help_seen() -> void:
 
 
 func _mark_help_seen() -> void:
-	if not OS.has_feature("web") or _help_seen:
+	if _help_seen:
 		return
 	_help_seen = true
 	var cfg := ConfigFile.new()
@@ -1354,14 +1433,22 @@ func _handle_touch_overlay(event: InputEvent) -> bool:
 
 func _handle_mode_select_pointer(point: Vector2) -> bool:
 	_layout_mode_select(get_viewport_rect().size)
+	for i in _diff_choice_rects.size():
+		var diff_rect: Rect2 = _diff_choice_rects[i]
+		if diff_rect.has_point(point):
+			_diff_pick_index = i
+			_mode_focus_row = 0
+			queue_redraw()
+			return true
 	for i in _mode_choice_rects.size():
 		var rect: Rect2 = _mode_choice_rects[i]
 		if rect.has_point(point):
 			_mode_pick_index = i
-			_confirm_game_mode(_mode_family_at(i))
+			_mode_focus_row = 1
+			queue_redraw()
 			return true
 	if _mode_play_rect.size.x > 0.0 and _mode_play_rect.has_point(point):
-		_confirm_game_mode(_mode_family_at(_mode_pick_index))
+		_activate_mode_select_primary()
 		return true
 	return true
 
@@ -1371,29 +1458,65 @@ func _handle_mode_select_keys(event: InputEvent) -> bool:
 		return false
 	if not event.is_pressed() or event.is_echo():
 		return false
+	if _key_pressed(event, KEY_ESCAPE) or event.is_action_pressed("ui_cancel"):
+		if _menu_can_resume:
+			_close_mode_select_to_game()
+		else:
+			queue_redraw()
+		return true
+	if _key_pressed(event, KEY_TAB):
+		_mode_focus_row = 1 - _mode_focus_row
+		queue_redraw()
+		return true
+	if _key_pressed(event, KEY_BRACKETLEFT) or _key_pressed(event, KEY_4):
+		_diff_pick_index = 0
+		_mode_focus_row = 0
+		queue_redraw()
+		return true
+	if _key_pressed(event, KEY_BRACKETRIGHT) or _key_pressed(event, KEY_5):
+		_diff_pick_index = 1
+		_mode_focus_row = 0
+		queue_redraw()
+		return true
 	if _key_pressed(event, KEY_UP) or _key_pressed(event, KEY_LEFT):
-		_mode_pick_index = (_mode_pick_index + GameModes.FAMILIES.size() - 1) % GameModes.FAMILIES.size()
+		if _mode_focus_row == 0:
+			_diff_pick_index = (
+				_diff_pick_index + GameModes.DIFFICULTIES.size() - 1
+			) % GameModes.DIFFICULTIES.size()
+		else:
+			_mode_pick_index = (
+				_mode_pick_index + GameModes.FAMILIES.size() - 1
+			) % GameModes.FAMILIES.size()
 		queue_redraw()
 		return true
 	if _key_pressed(event, KEY_DOWN) or _key_pressed(event, KEY_RIGHT):
-		_mode_pick_index = (_mode_pick_index + 1) % GameModes.FAMILIES.size()
+		if _mode_focus_row == 0:
+			_diff_pick_index = (_diff_pick_index + 1) % GameModes.DIFFICULTIES.size()
+		else:
+			_mode_pick_index = (_mode_pick_index + 1) % GameModes.FAMILIES.size()
 		queue_redraw()
 		return true
 	if _key_pressed(event, KEY_1):
-		_confirm_game_mode(GameModes.CLASSIC)
+		_mode_pick_index = 0
+		_mode_focus_row = 1
+		queue_redraw()
 		return true
 	if _key_pressed(event, KEY_2):
-		_confirm_game_mode(GameModes.DAILY)
+		_mode_pick_index = 1
+		_mode_focus_row = 1
+		queue_redraw()
 		return true
 	if _key_pressed(event, KEY_3):
-		_confirm_game_mode(GameModes.WEEKLY)
+		_mode_pick_index = 2
+		_mode_focus_row = 1
+		queue_redraw()
 		return true
 	if (
 		_key_pressed(event, KEY_SPACE)
 		or _key_pressed(event, KEY_ENTER)
 		or _key_pressed(event, KEY_KP_ENTER)
 	):
-		_confirm_game_mode(_mode_family_at(_mode_pick_index))
+		_activate_mode_select_primary()
 		return true
 	return true
 
@@ -1408,9 +1531,14 @@ func _input(event: InputEvent) -> void:
 	if _handle_touch_overlay(event):
 		get_viewport().set_input_as_handled()
 		return
-	if mode_select_open and _handle_mode_select_keys(event):
-		get_viewport().set_input_as_handled()
-		return
+	if mode_select_open:
+		# Allow mute / volume while the picker is open.
+		if music != null and music.handle_input(event):
+			get_viewport().set_input_as_handled()
+			return
+		if _handle_mode_select_keys(event):
+			get_viewport().set_input_as_handled()
+			return
 	if touch != null and touch.handle_input(event):
 		get_viewport().set_input_as_handled()
 		return
@@ -1496,14 +1624,18 @@ func _input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 			return
 		if mode_select_open:
-			# Stay on the picker until a mode is chosen.
-			queue_redraw()
+			# Fallback if Esc was not already handled in _handle_mode_select_keys.
+			if _menu_can_resume:
+				_close_mode_select_to_game()
 			get_viewport().set_input_as_handled()
 			return
 		if help_open or score_open:
 			_dismiss_help()
 			score_open = false
-			_open_mode_select_if_needed()
+			if _awaiting_mode():
+				_open_mode_select_if_needed()
+			else:
+				_open_mode_select_menu()
 			_sync_hold_flags_from_input()
 		elif _highscores_open() and highscores != null and not highscores.is_capturing_input():
 			highscores.close_overlay()
@@ -1513,10 +1645,9 @@ func _input(event: InputEvent) -> void:
 			DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
 		elif game_over:
 			_quit_game()
-		elif paused:
-			_quit_game()
 		else:
-			paused = true
+			# Esc opens the mode menu over a running (or paused) game.
+			_open_mode_select_menu()
 		queue_redraw()
 		get_viewport().set_input_as_handled()
 		return
@@ -1947,6 +2078,8 @@ func _draw_hud() -> void:
 		mode_label = str(GameModes.FAMILY_LABELS.get(game_mode, game_mode))
 		if game_mode == GameModes.DAILY or game_mode == GameModes.WEEKLY:
 			mode_label = "%s %s" % [mode_label, GameModes.period_label(game_mode)]
+		if difficulty == GameModes.DIFFICULTY_HARDCORE:
+			mode_label = "Hardcore · %s" % mode_label
 	if PlayDevice.is_touch_primary():
 		# Mobile uses an on-screen Help button; no "Press H" line.
 		if not mode_label.is_empty():
@@ -2190,6 +2323,7 @@ func _sync_touch_overlay_rects() -> void:
 	_touch_restart_rect = Rect2()
 	_mode_play_rect = Rect2()
 	_mode_choice_rects.clear()
+	_diff_choice_rects.clear()
 	if title_font == null or body_font == null:
 		return
 	var vp := get_viewport_rect().size
@@ -2239,24 +2373,34 @@ func _wrap_text_lines(text: String, font: Font, font_size: int, max_width: float
 
 func _layout_mode_select(vp: Vector2) -> Dictionary:
 	_mode_choice_rects.clear()
+	_diff_choice_rects.clear()
 	_mode_play_rect = Rect2()
 	var touch_ui := PlayDevice.is_touch_primary()
 	var title_size_local := help_title_size
 	var row_size := help_row_size
+	var section_size := maxi(11, int(round(float(hint_size) * 0.9)))
 	var hint_size_local := maxi(12, int(round(float(hint_size) * 0.95)))
 	var pad_x := 28.0 * ui_scale
 	var pad_top := 24.0 * ui_scale
 	var pad_bottom := 24.0 * ui_scale
 	var gap := 10.0 * ui_scale
-	var choice_h := maxf(48.0, 52.0 * ui_scale)
-	var play_h := 48.0 if touch_ui else 0.0
+	var choice_h := maxf(44.0, 48.0 * ui_scale)
+	var diff_h := maxf(40.0, 44.0 * ui_scale)
+	var play_h := 48.0
 	var title_h := title_font.get_ascent(title_size_local) + title_font.get_descent(title_size_local)
+	var section_h := body_font.get_ascent(section_size) + body_font.get_descent(section_size)
 	var line_h := body_font.get_ascent(hint_size_local) + body_font.get_descent(hint_size_local) + 4.0 * ui_scale
-	var footer_h := 0.0 if touch_ui else body_font.get_ascent(hint_size) + body_font.get_descent(hint_size) + 8.0 * ui_scale
-	var panel_w := minf(420.0 * ui_scale, vp.x - 16.0)
+	var footer_h := (
+		0.0 if touch_ui
+		else body_font.get_ascent(hint_size) + body_font.get_descent(hint_size) + 8.0 * ui_scale
+	)
+	var panel_w := minf(440.0 * ui_scale, vp.x - 16.0)
 	var hint_max_w := panel_w - pad_x * 2.0
 	var hint_lines := _wrap_text_lines(
-		GameModes.hint_for_family(_mode_family_at(_mode_pick_index)),
+		GameModes.hint_for_selection(
+			_mode_family_at(_mode_pick_index),
+			_difficulty_at(_diff_pick_index)
+		),
 		body_font,
 		hint_size_local,
 		hint_max_w
@@ -2265,7 +2409,13 @@ func _layout_mode_select(vp: Vector2) -> Dictionary:
 	var panel_h := (
 		pad_top
 		+ title_h
-		+ 14.0 * ui_scale
+		+ 12.0 * ui_scale
+		+ section_h
+		+ 6.0 * ui_scale
+		+ diff_h
+		+ 10.0 * ui_scale
+		+ section_h
+		+ 6.0 * ui_scale
 		+ float(GameModes.FAMILIES.size()) * (choice_h + gap)
 		+ hint_block_h
 		+ 12.0 * ui_scale
@@ -2279,25 +2429,42 @@ func _layout_mode_select(vp: Vector2) -> Dictionary:
 	panel.position.x = clampf(panel.position.x, 8.0, maxf(8.0, vp.x - panel.size.x - 8.0))
 	panel.position.y = clampf(panel.position.y, 8.0, maxf(8.0, vp.y - panel.size.y - 8.0))
 	var choice_w := panel.size.x - pad_x * 2.0
-	var y := panel.position.y + pad_top + title_h + 16.0 * ui_scale
+	var y := panel.position.y + pad_top + title_h + 14.0 * ui_scale
+	var diff_section_y := y + body_font.get_ascent(section_size)
+	y += section_h + 6.0 * ui_scale
+	var diff_gap := 8.0 * ui_scale
+	var diff_w := (choice_w - diff_gap) * 0.5
+	for i in GameModes.DIFFICULTIES.size():
+		_diff_choice_rects.append(
+			Rect2(panel.position.x + pad_x + float(i) * (diff_w + diff_gap), y, diff_w, diff_h)
+		)
+	y += diff_h + 10.0 * ui_scale
+	var mode_section_y := y + body_font.get_ascent(section_size)
+	y += section_h + 6.0 * ui_scale
 	for i in GameModes.FAMILIES.size():
 		_mode_choice_rects.append(Rect2(panel.position.x + pad_x, y, choice_w, choice_h))
 		y += choice_h + gap
 	var hint_y := y + body_font.get_ascent(hint_size_local)
-	if touch_ui:
-		var button_w := minf(180.0, panel.size.x - 24.0)
-		_mode_play_rect = Rect2(
-			panel.position.x + (panel.size.x - button_w) * 0.5,
-			panel.end.y - pad_bottom - play_h,
-			button_w,
-			play_h
-		)
+	var hint_block_bottom := hint_y + float(maxi(0, hint_lines.size() - 1)) * line_h + body_font.get_descent(hint_size_local)
+	var button_w := minf(180.0, panel.size.x - 24.0)
+	var play_y := hint_block_bottom + 12.0 * ui_scale
+	var play_max_y := panel.end.y - pad_bottom - play_h - footer_h
+	play_y = minf(play_y, play_max_y)
+	_mode_play_rect = Rect2(
+		panel.position.x + (panel.size.x - button_w) * 0.5,
+		play_y,
+		button_w,
+		play_h
+	)
 	return {
 		"panel": panel,
 		"pad_x": pad_x,
 		"pad_top": pad_top,
 		"title_size": title_size_local,
 		"row_size": row_size,
+		"section_size": section_size,
+		"mode_section_y": mode_section_y,
+		"diff_section_y": diff_section_y,
 		"hint_size": hint_size_local,
 		"hint_y": hint_y,
 		"hint_line_h": line_h,
@@ -2314,6 +2481,9 @@ func _draw_mode_select(vp: Vector2) -> void:
 	var pad_top: float = layout["pad_top"]
 	var title_size_local: int = int(layout["title_size"])
 	var row_size: int = int(layout["row_size"])
+	var section_size: int = int(layout["section_size"])
+	var mode_section_y: float = float(layout["mode_section_y"])
+	var diff_section_y: float = float(layout["diff_section_y"])
 	var hint_size_local: int = int(layout["hint_size"])
 	var hint_y: float = float(layout["hint_y"])
 	var hint_line_h: float = float(layout["hint_line_h"])
@@ -2336,14 +2506,65 @@ func _draw_mode_select(vp: Vector2) -> void:
 		title_size_local,
 		ColorTheme.accent()
 	)
+	var diff_section := "DIFFICULTY"
+	var diff_section_w := body_font.get_string_size(diff_section, HORIZONTAL_ALIGNMENT_LEFT, -1, section_size).x
+	draw_string(
+		body_font,
+		Vector2(panel.position.x + (panel.size.x - diff_section_w) * 0.5, diff_section_y),
+		diff_section,
+		HORIZONTAL_ALIGNMENT_LEFT,
+		-1,
+		section_size,
+		ColorTheme.muted() if _mode_focus_row != 0 else ColorTheme.accent(0.85)
+	)
+	for i in GameModes.DIFFICULTIES.size():
+		var diff: String = GameModes.DIFFICULTIES[i]
+		var diff_rect: Rect2 = _diff_choice_rects[i]
+		var diff_selected := i == _diff_pick_index
+		var diff_focused := diff_selected and _mode_focus_row == 0
+		var diff_fill := ColorTheme.bg_elevated(0.96) if diff_selected else ColorTheme.bg_deep(0.94)
+		var diff_border := ColorTheme.accent(0.95) if diff_focused else (
+			ColorTheme.accent(0.7) if diff_selected else ColorTheme.accent(0.4)
+		)
+		draw_rect(diff_rect, diff_fill, true, -1.0, true)
+		draw_rect(diff_rect, diff_border, false, 2.0 if diff_focused else 1.5, true)
+		var diff_label := str(GameModes.DIFFICULTY_LABELS.get(diff, diff))
+		var diff_label_w := body_font.get_string_size(diff_label, HORIZONTAL_ALIGNMENT_LEFT, -1, row_size).x
+		var diff_baseline := (
+			diff_rect.position.y
+			+ (diff_rect.size.y + body_font.get_ascent(row_size) - body_font.get_descent(row_size)) * 0.5
+		)
+		draw_string(
+			body_font,
+			Vector2(diff_rect.position.x + (diff_rect.size.x - diff_label_w) * 0.5, diff_baseline),
+			diff_label,
+			HORIZONTAL_ALIGNMENT_LEFT,
+			-1,
+			row_size,
+			ColorTheme.text()
+		)
+	var mode_section := "MODE"
+	var mode_section_w := body_font.get_string_size(mode_section, HORIZONTAL_ALIGNMENT_LEFT, -1, section_size).x
+	draw_string(
+		body_font,
+		Vector2(panel.position.x + (panel.size.x - mode_section_w) * 0.5, mode_section_y),
+		mode_section,
+		HORIZONTAL_ALIGNMENT_LEFT,
+		-1,
+		section_size,
+		ColorTheme.muted() if _mode_focus_row != 1 else ColorTheme.accent(0.85)
+	)
 	for i in GameModes.FAMILIES.size():
 		var family: String = GameModes.FAMILIES[i]
 		var rect: Rect2 = _mode_choice_rects[i]
 		var selected := i == _mode_pick_index
+		var focused := selected and _mode_focus_row == 1
 		var fill := ColorTheme.bg_elevated(0.96) if selected else ColorTheme.bg_deep(0.94)
-		var border := ColorTheme.accent(0.9) if selected else ColorTheme.accent(0.4)
+		var border := ColorTheme.accent(0.95) if focused else (
+			ColorTheme.accent(0.7) if selected else ColorTheme.accent(0.4)
+		)
 		draw_rect(rect, fill, true, -1.0, true)
-		draw_rect(rect, border, false, 2.0, true)
+		draw_rect(rect, border, false, 2.0 if focused else 1.5, true)
 		var label := "%d  %s" % [i + 1, str(GameModes.FAMILY_LABELS.get(family, family))]
 		var label_w := body_font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, row_size).x
 		var baseline := rect.position.y + (rect.size.y + body_font.get_ascent(row_size) - body_font.get_descent(row_size)) * 0.5
@@ -2369,9 +2590,13 @@ func _draw_mode_select(vp: Vector2) -> void:
 			ColorTheme.muted()
 		)
 	if _mode_play_rect.size.x > 0.0:
-		_draw_overlay_button(_mode_play_rect, "PLAY")
-	elif footer_h > 0.0:
-		var footer := "1-3 select    Enter play"
+		_draw_overlay_button(_mode_play_rect, _mode_select_primary_label())
+	if footer_h > 0.0:
+		var footer := (
+			"Esc resume  1-3 mode  [ ] difficulty  Enter"
+			if _menu_can_resume
+			else "1-3 mode  [ ] difficulty  Enter start"
+		)
 		var footer_w := body_font.get_string_size(footer, HORIZONTAL_ALIGNMENT_LEFT, -1, hint_size).x
 		var footer_y := panel.end.y - pad_bottom + body_font.get_ascent(hint_size) - footer_h + 4.0 * ui_scale
 		draw_string(

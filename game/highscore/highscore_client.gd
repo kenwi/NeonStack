@@ -30,7 +30,9 @@ var leaderboard_page := 0
 var submit_mode_id := ""
 var view_mode_id := ""
 var _game_mode := GameModes.CLASSIC
+var _game_difficulty := GameModes.DIFFICULTY_CLASSIC
 var _view_family := GameModes.CLASSIC
+var _view_difficulty := GameModes.DIFFICULTY_CLASSIC
 var _view_mobile := false
 var _view_period_unix := 0
 
@@ -47,6 +49,8 @@ var _editing_name := false
 var _tab_classic_rect := Rect2()
 var _tab_daily_rect := Rect2()
 var _tab_weekly_rect := Rect2()
+var _tab_diff_classic_rect := Rect2()
+var _tab_diff_hardcore_rect := Rect2()
 var _tab_desktop_rect := Rect2()
 var _tab_mobile_rect := Rect2()
 var _period_prev_rect := Rect2()
@@ -116,15 +120,22 @@ func set_ui_scale(ui_scale: float) -> void:
 	_ui_scale = maxf(0.5, ui_scale)
 
 
-func set_game_mode(game_mode: String, unix_utc: int = -1) -> void:
+func set_game_mode(
+	game_mode: String,
+	unix_utc: int = -1,
+	difficulty: String = GameModes.DIFFICULTY_CLASSIC
+) -> void:
 	if not GameModes.is_valid_family(game_mode):
 		return
+	var diff := difficulty if GameModes.is_valid_difficulty(difficulty) else GameModes.DIFFICULTY_CLASSIC
 	_game_mode = game_mode
+	_game_difficulty = diff
 	if unix_utc < 0:
 		unix_utc = GameModes.utc_now_unix()
-	submit_mode_id = GameModes.board_id(game_mode, PlayDevice.is_touch_primary(), unix_utc)
+	submit_mode_id = GameModes.board_id(game_mode, PlayDevice.is_touch_primary(), unix_utc, diff)
 	view_mode_id = submit_mode_id
 	_view_family = game_mode
+	_view_difficulty = diff
 	_view_mobile = PlayDevice.is_touch_primary()
 	_view_period_unix = unix_utc
 
@@ -193,6 +204,7 @@ func open_leaderboard() -> void:
 
 func _sync_view_from_board_id(board_id: String) -> void:
 	_view_family = GameModes.family_from_board_id(board_id)
+	_view_difficulty = GameModes.difficulty_from_board_id(board_id)
 	_view_mobile = GameModes.is_mobile_board(board_id)
 	if _view_family == GameModes.CLASSIC:
 		_view_period_unix = GameModes.utc_now_unix()
@@ -201,7 +213,7 @@ func _sync_view_from_board_id(board_id: String) -> void:
 
 
 func _rebuild_view_mode_id() -> String:
-	return GameModes.board_id(_view_family, _view_mobile, _view_period_unix)
+	return GameModes.board_id(_view_family, _view_mobile, _view_period_unix, _view_difficulty)
 
 
 func _set_view_family(family: String) -> void:
@@ -211,6 +223,15 @@ func _set_view_family(family: String) -> void:
 		return
 	_view_family = family
 	_view_period_unix = GameModes.utc_now_unix()
+	_apply_view_mode(_rebuild_view_mode_id())
+
+
+func _set_view_difficulty(difficulty: String) -> void:
+	if not GameModes.is_valid_difficulty(difficulty):
+		return
+	if _view_difficulty == difficulty:
+		return
+	_view_difficulty = difficulty
 	_apply_view_mode(_rebuild_view_mode_id())
 
 
@@ -482,6 +503,12 @@ func _handle_leaderboard_pointer(event: InputEvent) -> bool:
 		return true
 	if _tab_weekly_rect.has_point(point):
 		_set_view_family(GameModes.WEEKLY)
+		return true
+	if _tab_diff_classic_rect.has_point(point):
+		_set_view_difficulty(GameModes.DIFFICULTY_CLASSIC)
+		return true
+	if _tab_diff_hardcore_rect.has_point(point):
+		_set_view_difficulty(GameModes.DIFFICULTY_HARDCORE)
 		return true
 	if _tab_desktop_rect.has_point(point):
 		_set_view_platform(false)
@@ -770,6 +797,16 @@ func _draw_leaderboard_panel(vp: Vector2) -> void:
 	_draw_choice(_tab_classic_rect, "CLASSIC", _view_family == GameModes.CLASSIC)
 	_draw_choice(_tab_daily_rect, "DAILY", _view_family == GameModes.DAILY)
 	_draw_choice(_tab_weekly_rect, "WEEKLY", _view_family == GameModes.WEEKLY)
+	_draw_choice(
+		_tab_diff_classic_rect,
+		"CLASSIC",
+		_view_difficulty == GameModes.DIFFICULTY_CLASSIC
+	)
+	_draw_choice(
+		_tab_diff_hardcore_rect,
+		"HARDCORE",
+		_view_difficulty == GameModes.DIFFICULTY_HARDCORE
+	)
 	_draw_choice(_tab_desktop_rect, "DESKTOP", not _view_mobile)
 	_draw_choice(_tab_mobile_rect, "MOBILE", _view_mobile)
 	y = _tab_desktop_rect.end.y + 18.0 * ui_scale
@@ -1355,7 +1392,7 @@ func _layout_leaderboard(vp: Vector2) -> Rect2:
 	var action_h := 56.0 if touch_ui else 0.0
 	var panel_h := minf(
 		100.0 * ui_scale
-		+ tab_h * 2.0
+		+ tab_h * 3.0
 		+ period_h
 		+ action_h
 		+ header_h
@@ -1374,8 +1411,12 @@ func _layout_leaderboard(vp: Vector2) -> Rect2:
 	_tab_classic_rect = Rect2(panel.position.x + 12.0, tab_y, family_w, tab_h)
 	_tab_daily_rect = Rect2(_tab_classic_rect.end.x + gap, tab_y, family_w, tab_h)
 	_tab_weekly_rect = Rect2(_tab_daily_rect.end.x + gap, tab_y, family_w, tab_h)
+	var diff_w := (panel.size.x - 24.0 - gap) * 0.5
+	var diff_y := _tab_classic_rect.end.y + 8.0
+	_tab_diff_classic_rect = Rect2(panel.position.x + 12.0, diff_y, diff_w, tab_h)
+	_tab_diff_hardcore_rect = Rect2(_tab_diff_classic_rect.end.x + gap, diff_y, diff_w, tab_h)
 	var platform_w := (panel.size.x - 24.0 - gap) * 0.5
-	var platform_y := _tab_classic_rect.end.y + 8.0
+	var platform_y := _tab_diff_classic_rect.end.y + 8.0
 	_tab_desktop_rect = Rect2(panel.position.x + 12.0, platform_y, platform_w, tab_h)
 	_tab_mobile_rect = Rect2(_tab_desktop_rect.end.x + gap, platform_y, platform_w, tab_h)
 	_period_prev_rect = Rect2()
