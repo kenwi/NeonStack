@@ -3,9 +3,10 @@ name: Deploy GitHub Pages
 on:
   push:
     branches: [main]
-    # Server is a separate Docker API; client Pages deploys only need game/export changes.
+    # Server API and ops verifier are not part of the web client export.
     paths-ignore:
       - "server/**"
+      - "tools/verify/**"
   workflow_dispatch:
 
 permissions:
