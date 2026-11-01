@@ -472,17 +472,7 @@ func _wake_name_cursor() -> void:
 
 
 func _is_allowed_name_char(ch: String) -> bool:
-	if ch.length() != 1:
-		return false
-	var code := ch.unicode_at(0)
-	return (
-		(code >= 65 and code <= 90)
-		or (code >= 97 and code <= 122)
-		or (code >= 48 and code <= 57)
-		or ch == " "
-		or ch == "_"
-		or ch == "-"
-	)
+	return HighscoreChecksum.is_allowed_player_name_char(ch)
 
 
 func _skip_name_entry() -> void:

@@ -100,9 +100,10 @@ public sealed class DiscordScoreAnnouncer
             ? $"New #1 on {modeLabel}!"
             : $"New score on {modeLabel}";
 
+        var player = EscapeDiscordMarkdown(submission.PlayerName);
         var description = isTopSpot
-            ? $"**{submission.PlayerName}** took the top spot with **{score}** points in {time}."
-            : $"**{submission.PlayerName}** scored **{score}** points in {time} " +
+            ? $"**{player}** took the top spot with **{score}** points in {time}."
+            : $"**{player}** scored **{score}** points in {time} " +
               $"(rank #{result.Rank} of {result.TotalEntriesForMode}).";
 
         var gameUrl = _configuration["Discord:GameUrl"];
@@ -178,5 +179,20 @@ public sealed class DiscordScoreAnnouncer
         return timeSpan.TotalHours >= 1
             ? timeSpan.ToString(@"h\:mm\:ss", CultureInfo.InvariantCulture)
             : timeSpan.ToString(@"m\:ss", CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>Escape Discord markdown metacharacters already allowed in player names (e.g. _).</summary>
+    private static string EscapeDiscordMarkdown(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+            return text;
+
+        return text
+            .Replace("\\", "\\\\", StringComparison.Ordinal)
+            .Replace("*", "\\*", StringComparison.Ordinal)
+            .Replace("_", "\\_", StringComparison.Ordinal)
+            .Replace("~", "\\~", StringComparison.Ordinal)
+            .Replace("`", "\\`", StringComparison.Ordinal)
+            .Replace("|", "\\|", StringComparison.Ordinal);
     }
 }

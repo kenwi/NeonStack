@@ -11,10 +11,34 @@ static var _mode_regex: RegEx
 static func _ensure_regex() -> void:
 	if _name_regex == null:
 		_name_regex = RegEx.new()
-		_name_regex.compile("[^A-Za-z0-9 _-]")
+		## Keep in sync with server Shared/ScoreSanitizer.cs.
+		## Letters (Latin-1 incl. æøå) + digits + space/_/- + limited punctuation.
+		## No markdown/HTML/control chars (@<>*`|\\ etc.) - reduces Discord/log abuse.
+		_name_regex.compile("[^A-Za-z0-9À-ÖØ-öø-ÿ _.!?'\\-]")
 	if _mode_regex == null:
 		_mode_regex = RegEx.new()
 		_mode_regex.compile("[^A-Za-z0-9_-]")
+
+
+static func is_allowed_player_name_char(ch: String) -> bool:
+	if ch.length() != 1:
+		return false
+	var code := ch.unicode_at(0)
+	return (
+		(code >= 65 and code <= 90)
+		or (code >= 97 and code <= 122)
+		or (code >= 48 and code <= 57)
+		or (code >= 0xC0 and code <= 0xD6)
+		or (code >= 0xD8 and code <= 0xF6)
+		or (code >= 0xF8 and code <= 0xFF)
+		or ch == " "
+		or ch == "_"
+		or ch == "-"
+		or ch == "."
+		or ch == "!"
+		or ch == "?"
+		or ch == "'"
+	)
 
 
 static func sanitize_player_name(name: String) -> String:

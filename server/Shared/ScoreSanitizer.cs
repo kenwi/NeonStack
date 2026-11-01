@@ -14,7 +14,10 @@ public static partial class ScoreSanitizer
     public const int MaxLevel = 15;
     public const float MaxElapsedSeconds = 86_400f;
 
-    [GeneratedRegex(@"[^A-Za-z0-9 _-]")]
+    // Keep in sync with game/highscore/highscore_checksum.gd.
+    // Letters (Latin-1 incl. æøå) + digits + space/_/- + limited punctuation (. ! ? ').
+    // Blocks markdown/HTML/control chars to limit Discord/log abuse.
+    [GeneratedRegex(@"[^A-Za-z0-9À-ÖØ-öø-ÿ _.!?'\-]")]
     private static partial Regex InvalidNameChars();
 
     [GeneratedRegex(@"[^A-Za-z0-9_-]")]
