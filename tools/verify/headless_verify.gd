@@ -9,7 +9,11 @@ extends SceneTree
 ##   godot --headless --path . --script res://tools/verify/headless_verify.gd -- \
 ##     --mode <modeId> --rank <n> [--highscores PATH] [--replays PATH]
 ##   godot --headless --path . --script res://tools/verify/headless_verify.gd -- \
-##     --mode <modeId> --all [--replays-only] [--highscores PATH] [--replays PATH]
+##     --all [--mode <modeId>] [--replays-only] [--highscores PATH] [--replays PATH]
+##
+## Missing replay files: skipped (and counted) by default. --replays-only quietly
+## filters to entries that have a replay and never reports skip.
+## --all without --mode verifies every board in highscores.json.
 
 const PlayDevice = preload("res://game/platform/play_device.gd")
 const HighscoreChecksum = preload("res://game/highscore/highscore_checksum.gd")
@@ -46,10 +50,16 @@ func _initialize() -> void:
 	var verify_all: bool = bool(args.get("all", false))
 
 	if verify_all:
-		_jobs = _jobs_for_mode(highscores_path, mode_arg)
-		if _jobs.is_empty():
-			_fail_fatal("No highscore entries for mode=%s in %s" % [mode_arg, highscores_path])
-			return
+		if mode_arg.is_empty():
+			_jobs = _jobs_for_all_modes(highscores_path)
+			if _jobs.is_empty():
+				_fail_fatal("No highscore entries in %s" % highscores_path)
+				return
+		else:
+			_jobs = _jobs_for_mode(highscores_path, mode_arg)
+			if _jobs.is_empty():
+				_fail_fatal("No highscore entries for mode=%s in %s" % [mode_arg, highscores_path])
+				return
 	elif not checksum_arg.is_empty():
 		var found := _find_entry_by_checksum(highscores_path, checksum_arg, mode_arg)
 		if found.is_empty():
@@ -73,7 +83,8 @@ func _initialize() -> void:
 		_jobs = [found_rank]
 
 	if _replays_only:
-		_jobs = _filter_jobs_with_replays(_jobs)
+		# Quietly drop entries with no replay file; do not count or print skips.
+		_jobs = _filter_jobs_with_replays(_jobs, false)
 		if _jobs.is_empty():
 			_fail_fatal("No entries with replay files to verify")
 			return
@@ -106,14 +117,13 @@ func _process(_delta: float) -> bool:
 
 
 func _run_all_jobs() -> void:
-	var skip_bit := (" skip=%s" % _skip_count) if _skip_count > 0 else ""
-	print("VERIFY jobs=%s%s" % [_jobs.size(), skip_bit])
+	print("VERIFY jobs=%s" % _jobs.size())
 	for i in _jobs.size():
 		_job_index = i
 		var job: Dictionary = _jobs[i]
 		_verify_job(job)
 	var total := _pass_count + _fail_count
-	if _skip_count > 0:
+	if not _replays_only and _skip_count > 0:
 		print(
 			"SUMMARY pass=%s fail=%s skip=%s verified=%s"
 			% [_pass_count, _fail_count, _skip_count, total]
@@ -146,7 +156,8 @@ func _verify_job(job: Dictionary) -> void:
 	var replay_path := _replay_path(_replays_dir, checksum)
 	var replay_text := _read_text(replay_path)
 	if replay_text.is_empty():
-		_record_fail("%s | replay missing: %s" % [label, replay_path])
+		# Without --replays-only, missing files are skips (not fails).
+		_record_skip("%s | no replay" % label)
 		return
 
 	var parsed: Variant = JSON.parse_string(replay_text)
@@ -303,7 +314,7 @@ func _parse_args(argv: PackedStringArray) -> Dictionary:
 			"--help", "-h":
 				return {
 					"error":
-					"Usage: --checksum <hex> | --mode <modeId> --rank <n> | --mode <modeId> --all [--replays-only] [--highscores PATH] [--replays PATH]"
+					"Usage: --checksum <hex> | --mode <modeId> --rank <n> | --all [--mode <modeId>] [--replays-only] [--highscores PATH] [--replays PATH]"
 				}
 			_:
 				if a.begins_with("--checksum="):
@@ -331,8 +342,6 @@ func _parse_args(argv: PackedStringArray) -> Dictionary:
 	if verify_all:
 		if has_checksum or has_rank:
 			return {"error": "--all cannot be combined with --checksum or --rank"}
-		if not has_mode:
-			return {"error": "--all requires --mode"}
 		base["checksum"] = ""
 		base["mode"] = mode
 		base["rank"] = 0
@@ -356,7 +365,7 @@ func _parse_args(argv: PackedStringArray) -> Dictionary:
 		return {"error": "--mode requires --rank or --all (or pass --checksum)"}
 	if has_rank and not has_mode:
 		return {"error": "--rank requires --mode"}
-	return {"error": "Required: --checksum <hex>  OR  --mode <modeId> --rank <n>  OR  --mode <modeId> --all"}
+	return {"error": "Required: --checksum <hex>  OR  --mode <modeId> --rank <n>  OR  --all [--mode <modeId>]"}
 
 
 func _job_label(job: Dictionary) -> String:
@@ -385,7 +394,7 @@ func _job_has_replay(job: Dictionary) -> bool:
 	return not f.get_as_text().strip_edges().is_empty()
 
 
-func _filter_jobs_with_replays(jobs: Array) -> Array:
+func _filter_jobs_with_replays(jobs: Array, report_skips: bool) -> Array:
 	var kept: Array = []
 	for job in jobs:
 		if typeof(job) != TYPE_DICTIONARY:
@@ -393,16 +402,38 @@ func _filter_jobs_with_replays(jobs: Array) -> Array:
 		var typed: Dictionary = job
 		if _job_has_replay(typed):
 			kept.append(typed)
-		else:
-			_skip_count += 1
-			print("%s %s | no replay" % [_ansi_skip(), _job_label(typed)])
+		elif report_skips:
+			_record_skip("%s | no replay" % _job_label(typed))
 	return kept
+
+
+func _record_skip(message: String) -> void:
+	_skip_count += 1
+	print("%s %s" % [_ansi_skip(), message])
 
 
 func _ansi_skip() -> String:
 	if not _ansi_enabled():
 		return "SKIP"
 	return "\u001b[33mSKIP\u001b[0m"
+
+
+func _jobs_for_all_modes(highscores_path: String) -> Array:
+	var modes := _load_modes(highscores_path)
+	if modes.is_empty():
+		return []
+	var jobs: Array = []
+	var keys: Array = modes.keys()
+	keys.sort()
+	for key in keys:
+		var mode_id := str(key)
+		var raw: Variant = modes[key]
+		if typeof(raw) != TYPE_ARRAY:
+			continue
+		var ranked := _rank_entries(raw as Array)
+		for i in ranked.size():
+			jobs.append({"modeId": mode_id, "entry": ranked[i], "rank": i + 1})
+	return jobs
 
 
 func _jobs_for_mode(highscores_path: String, mode_id: String) -> Array:

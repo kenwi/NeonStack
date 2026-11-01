@@ -49,10 +49,17 @@ func load_replay(data: Dictionary) -> bool:
 		if not ReplayActions.is_known(action):
 			continue
 		var tick := int(item.get("t", 0))
-		_events.append({"t": tick, "a": action})
+		# Keep original index so same-tick ties stay in recording order.
+		# Godot's sort_custom is unstable; sorting by tick alone reverses
+		# equal-key pairs (e.g. left_on/left_off) and desyncs playback.
+		_events.append({"t": tick, "a": action, "i": _events.size()})
 		if tick > _last_event_tick:
 			_last_event_tick = tick
-	_events.sort_custom(func(a, b): return int(a.t) < int(b.t))
+	_events.sort_custom(func(a, b):
+		if int(a.t) != int(b.t):
+			return int(a.t) < int(b.t)
+		return int(a.i) < int(b.i)
+	)
 	_index = 0
 	_seed = int(data.get("seed", 0))
 	_expected_score = int(data.get("finalScore", -1))

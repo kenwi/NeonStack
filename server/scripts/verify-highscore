@@ -7,9 +7,14 @@ spot), or verifies every entry on a board with --mode + --all.
 Examples:
   verify-highscore --checksum abcdef...
   verify-highscore --mode classic --rank 1
+  verify-highscore --all
   verify-highscore --mode classic --all
-  verify-highscore --mode classic --all --replays-only
+  verify-highscore --all --replays-only
   verify-highscore -m classic-mobile -a --highscores /data/highscores.json
+
+Missing replays are skipped by default. --replays-only only verifies entries
+that have a replay file (no skip lines or skip= in the summary).
+--all without --mode verifies every board in highscores.json.
 """
 
 from __future__ import annotations
@@ -71,7 +76,7 @@ def main() -> int:
         "-m",
         "--mode",
         default=None,
-        help="Board mode id (use with --rank / --all, or to scope --checksum)",
+        help="Board mode id (with --rank, to scope --all / --checksum)",
     )
     parser.add_argument(
         "-r",
@@ -84,12 +89,12 @@ def main() -> int:
         "-a",
         "--all",
         action="store_true",
-        help="Verify every entry on --mode (ranked order)",
+        help="Verify every entry (all boards, or only --mode if set)",
     )
     parser.add_argument(
         "--replays-only",
         action="store_true",
-        help="Skip entries that have no replay file (useful with --all)",
+        help="Only verify entries that have a replay (quiet filter; no skip reporting)",
     )
     parser.add_argument(
         "--highscores",
@@ -118,8 +123,6 @@ def main() -> int:
     if verify_all:
         if checksum or rank is not None:
             parser.error("--all cannot be combined with --checksum or --rank")
-        if not mode:
-            parser.error("--all requires --mode")
     elif checksum:
         if rank is not None and not mode:
             parser.error("--rank requires --mode when used with --checksum")
@@ -132,7 +135,7 @@ def main() -> int:
         parser.error("--rank requires --mode")
     else:
         parser.error(
-            "Required: --checksum HEX  OR  --mode MODE --rank N  OR  --mode MODE --all"
+            "Required: --checksum HEX  OR  --mode MODE --rank N  OR  --all [--mode MODE]"
         )
 
     godot = args.godot or find_godot()
