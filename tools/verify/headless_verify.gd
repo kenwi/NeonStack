@@ -18,7 +18,6 @@ extends SceneTree
 const PlayDevice = preload("res://game/platform/play_device.gd")
 const HighscoreChecksum = preload("res://game/highscore/highscore_checksum.gd")
 const ReplayFormat = preload("res://game/replay/replay_format.gd")
-
 const ELAPSED_TOLERANCE := 0.02
 const MAIN_SCENE := "res://game/main.tscn"
 
@@ -168,6 +167,11 @@ func _verify_job(job: Dictionary) -> void:
 	if not ReplayFormat.is_valid(replay_data):
 		_record_fail("%s | replay schema invalid" % label)
 		return
+	ReplayFormat.ensure_arr_for_legacy(
+		replay_data,
+		mode_id,
+		str(entry.get("SubmittedAt", entry.get("submittedAt", "")))
+	)
 
 	PlayDevice.force_from_board_id(mode_id)
 	_main.configure_run_from_board_id(mode_id)

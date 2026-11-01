@@ -40,6 +40,9 @@ func export_dict(main: Node) -> Dictionary:
 	elif main.get("game_mode") != null and str(main.game_mode) != "":
 		var diff := str(main.get("difficulty"))
 		mode_id = PlayDevice.score_mode_id_for(str(main.game_mode), -1, diff)
+	var arr := (
+		ReplayFormat.ARR_TOUCH if PlayDevice.is_touch_primary() else ReplayFormat.ARR_DESKTOP
+	)
 	return ReplayFormat.build(
 		mode_id,
 		seed_value,
@@ -47,7 +50,8 @@ func export_dict(main: Node) -> Dictionary:
 		int(main.score),
 		int(main.lines_cleared),
 		int(main.level),
-		float(main.elapsed_seconds)
+		float(main.elapsed_seconds),
+		arr
 	)
 
 

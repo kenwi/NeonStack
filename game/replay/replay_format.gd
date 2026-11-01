@@ -2,9 +2,14 @@ extends RefCounted
 
 ## Versioned replay JSON helpers.
 
+const GameModes = preload("res://game/mode/game_modes.gd")
+
 const VERSION := 1
 const TICK_HZ := 60
 const MAX_BYTES := 1_048_576
+## Auto-repeat interval while holding left/right (seconds per cell after DAS).
+const ARR_DESKTOP := 0.03
+const ARR_TOUCH := 0.016
 
 
 static func build(
@@ -14,19 +19,50 @@ static func build(
 	final_score: int,
 	lines_cleared: int,
 	level: int,
-	elapsed_seconds: float
+	elapsed_seconds: float,
+	arr_interval: float = ARR_DESKTOP
 ) -> Dictionary:
 	return {
 		"v": VERSION,
 		"modeId": mode_id,
 		"seed": run_seed,
 		"tickHz": TICK_HZ,
+		"arr": arr_interval,
 		"events": events,
 		"finalScore": final_score,
 		"linesCleared": lines_cleared,
 		"level": level,
 		"elapsedSeconds": elapsed_seconds,
 	}
+
+
+## Touch ARR shipped 2026-10-31 ~13:55 +01:00; older mobile replays used desktop ARR.
+const ARR_TOUCH_CUTOVER_PREFIX := "2026-10-31T13:55:00"
+
+
+## ARR for playback. Prefer embedded `arr`; else desktop (legacy omission).
+static func arr_from_replay(data: Dictionary) -> float:
+	if data.has("arr"):
+		var arr := float(data.get("arr", ARR_DESKTOP))
+		if arr > 0.0:
+			return arr
+	return ARR_DESKTOP
+
+
+## Fill missing `arr` using board id + highscore SubmittedAt (verify / ops).
+static func ensure_arr_for_legacy(
+	data: Dictionary,
+	board_id: String,
+	submitted_at: String
+) -> void:
+	if data.has("arr") and float(data.get("arr", 0.0)) > 0.0:
+		return
+	if GameModes.is_mobile_board(board_id):
+		var stamp := submitted_at.substr(0, ARR_TOUCH_CUTOVER_PREFIX.length())
+		if not stamp.is_empty() and stamp >= ARR_TOUCH_CUTOVER_PREFIX:
+			data["arr"] = ARR_TOUCH
+			return
+	data["arr"] = ARR_DESKTOP
 
 
 static func to_json(data: Dictionary) -> String:

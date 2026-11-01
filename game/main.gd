@@ -198,6 +198,8 @@ var replay_mode := false
 var replay_status := ""
 var replay_speed := 1.0
 var replay_total_seconds := 0.0
+## >0 while replaying: ARR from the recording (legacy files omit it → desktop ARR).
+var _replay_arr_interval := -1.0
 const REPLAY_SPEEDS: Array[float] = [0.5, 1.0, 2.0, 4.0, 8.0]
 ## Best leaderboard place greeted this run (11 = not yet in top 10).
 var _rank_announced := 11
@@ -1072,8 +1074,7 @@ func _handle_das(delta: float) -> void:
 		das_timer = 0.0
 		arr_timer = 0.0
 		return
-	# Touch: same DAS charge as desktop, faster auto-repeat after it engages.
-	var arr_interval := 0.016 if PlayDevice.is_touch_primary() else 0.03
+	var arr_interval := _arr_interval()
 	if dir != move_held:
 		move_held = dir
 		_try_move(dir, 0)
@@ -1086,6 +1087,15 @@ func _handle_das(delta: float) -> void:
 		if arr_timer <= 0.0:
 			_try_move(dir, 0)
 			arr_timer = arr_interval
+
+
+func _arr_interval() -> float:
+	if replay_mode:
+		if _replay_arr_interval > 0.0:
+			return _replay_arr_interval
+		# Legacy replays have no `arr` field; they used desktop ARR on all devices.
+		return ReplayFormat.ARR_DESKTOP
+	return ReplayFormat.ARR_TOUCH if PlayDevice.is_touch_primary() else ReplayFormat.ARR_DESKTOP
 
 
 func apply_action(action: String, record: bool = true) -> void:
@@ -1158,6 +1168,7 @@ func start_replay_from_data(data: Dictionary) -> bool:
 	replay_status = "Playing replay"
 	replay_speed = 1.0
 	replay_total_seconds = replay_player.get_duration_seconds()
+	_replay_arr_interval = ReplayFormat.arr_from_replay(data)
 	if highscores != null:
 		highscores.close_overlay()
 		highscores.reset_run()
@@ -1220,6 +1231,7 @@ func stop_replay() -> void:
 	replay_status = ""
 	replay_speed = 1.0
 	replay_total_seconds = 0.0
+	_replay_arr_interval = -1.0
 	_clear_replay_control_rects()
 	if replay_player != null:
 		replay_player.stop()
