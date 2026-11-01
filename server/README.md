@@ -89,6 +89,8 @@ TZ=Europe/Amsterdam
 
 Cloudflare Tunnel exposes the API without opening inbound ports. TLS terminates at Cloudflare; `cloudflared` forwards HTTP to the `highscores` container.
 
+The Compose file sets `name: tetris` (and image `tetris-highscores:local`) so this stack does not collide with another game server whose directory also resolves to project name `server` (for example Wolfrender on the same host). If you previously started this stack before `name:` was set, remove the old project once: `docker compose -p server --profile tunnel down`.
+
 ### 1. Create a tunnel
 
 1. Open [Cloudflare Zero Trust](https://one.dash.cloudflare.com/) > **Networks** > **Tunnels**.

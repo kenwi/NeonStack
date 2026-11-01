@@ -1,8 +1,11 @@
+name: tetris
+
 services:
   highscores:
     build:
       context: .
       dockerfile: Dockerfile
+    image: tetris-highscores:local
     container_name: tetris-highscores
     restart: unless-stopped
     environment:
