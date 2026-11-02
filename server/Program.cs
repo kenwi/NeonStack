@@ -142,6 +142,7 @@ app.MapGet("/api/challenges/{id}", async (
 app.MapPost("/api/scores", async (
     ScoreSubmission submission,
     JsonFileScoreStore store,
+    ChallengeStore challenges,
     DiscordScoreAnnouncer announcer,
     SubmissionRejectionTracker rejectionTracker,
     HttpContext httpContext,
@@ -204,6 +205,25 @@ app.MapPost("/api/scores", async (
     }
 
     announcer.AnnounceInBackground(normalized, addResult);
+
+    if (!string.IsNullOrEmpty(normalized.PlayerId))
+    {
+        try
+        {
+            await challenges.TryUpdateCreatorDisplayNameAsync(
+                normalized.PlayerId,
+                normalized.PlayerName,
+                cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex,
+                "Challenge creator display name update failed: PlayerId={PlayerId}, PlayerName={PlayerName}",
+                normalized.PlayerId,
+                normalized.PlayerName);
+        }
+    }
 
     logger.LogInformation(
         "POST /api/scores succeeded: ClientIp={ClientIp}, ModeId={ModeId}, PlayerName={PlayerName}, FinalScore={FinalScore}, Rank={Rank}",

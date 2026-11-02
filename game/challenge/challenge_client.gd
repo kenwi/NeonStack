@@ -3,6 +3,7 @@ extends Node2D
 ## Private challenge create / join overlay + active board state.
 
 const ChallengeConfig = preload("res://game/challenge/challenge_config.gd")
+const HighscoreConfig = preload("res://game/highscore/highscore_config.gd")
 const GameModes = preload("res://game/mode/game_modes.gd")
 const PlayDevice = preload("res://game/platform/play_device.gd")
 const ColorTheme = preload("res://game/theme/color_theme.gd")
@@ -249,6 +250,7 @@ func _submit_create() -> void:
 		"name": sanitized,
 		"family": draft_family,
 		"difficulty": draft_difficulty,
+		"creatorId": HighscoreConfig.ensure_player_id(),
 	}
 	var body := JSON.stringify(payload)
 	var headers := PackedStringArray(["Content-Type: application/json"])

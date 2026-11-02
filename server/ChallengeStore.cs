@@ -87,6 +87,10 @@ public sealed class ChallengeStore
         if (!ValidDifficulties.Contains(difficulty))
             return (null, "Difficulty must be classic or hardcore.");
 
+        var creatorId = ScoreSanitizer.SanitizePlayerId(request.CreatorId);
+        if (string.IsNullOrEmpty(creatorId))
+            return (null, "CreatorId is required.");
+
         long? periodUnix = null;
         if (family is "daily" or "weekly")
             periodUnix = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
@@ -112,18 +116,20 @@ public sealed class ChallengeStore
                 Family = family,
                 Difficulty = difficulty,
                 PeriodUnix = periodUnix,
-                CreatedAt = createdAt
+                CreatedAt = createdAt,
+                CreatorId = creatorId
             };
             data.Boards[token] = entry;
             await WriteAsync(data, cancellationToken);
 
             _logger.LogInformation(
-                "Challenge created: Id={Id}, Name={Name}, Family={Family}, Difficulty={Difficulty}, PeriodUnix={PeriodUnix}",
+                "Challenge created: Id={Id}, Name={Name}, Family={Family}, Difficulty={Difficulty}, PeriodUnix={PeriodUnix}, CreatorId={CreatorId}",
                 token,
                 name,
                 family,
                 difficulty,
-                periodUnix);
+                periodUnix,
+                creatorId);
 
             return (ToDto(token, entry), null);
         }
@@ -146,6 +152,49 @@ public sealed class ChallengeStore
             if (!data.Boards.TryGetValue(token, out var entry))
                 return null;
             return ToDto(token, entry);
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    public async Task<int> TryUpdateCreatorDisplayNameAsync(
+        string? rawCreatorId,
+        string? rawDisplayName,
+        CancellationToken cancellationToken = default)
+    {
+        var creatorId = ScoreSanitizer.SanitizePlayerId(rawCreatorId);
+        var displayName = ScoreSanitizer.SanitizePlayerName(rawDisplayName);
+        if (string.IsNullOrEmpty(creatorId) || displayName == "Anonymous")
+            return 0;
+
+        await _lock.WaitAsync(cancellationToken);
+        try
+        {
+            var data = await ReadAsync(cancellationToken);
+            var updated = 0;
+            foreach (var entry in data.Boards.Values)
+            {
+                if (!string.Equals(entry.CreatorId, creatorId, StringComparison.Ordinal))
+                    continue;
+                if (string.Equals(entry.CreatorDisplayName, displayName, StringComparison.Ordinal))
+                    continue;
+                entry.CreatorDisplayName = displayName;
+                updated++;
+            }
+
+            if (updated > 0)
+            {
+                await WriteAsync(data, cancellationToken);
+                _logger.LogInformation(
+                    "Challenge creator display names updated: CreatorId={CreatorId}, DisplayName={DisplayName}, Boards={Boards}",
+                    creatorId,
+                    displayName,
+                    updated);
+            }
+
+            return updated;
         }
         finally
         {
@@ -197,7 +246,9 @@ public sealed class ChallengeStore
         Family = entry.Family,
         Difficulty = entry.Difficulty,
         PeriodUnix = entry.PeriodUnix,
-        CreatedAt = entry.CreatedAt
+        CreatedAt = entry.CreatedAt,
+        CreatorId = string.IsNullOrEmpty(entry.CreatorId) ? null : entry.CreatorId,
+        CreatorDisplayName = string.IsNullOrEmpty(entry.CreatorDisplayName) ? null : entry.CreatorDisplayName
     };
 
     private static string GenerateToken()
@@ -248,5 +299,7 @@ public sealed class ChallengeStore
         public string Difficulty { get; set; } = "classic";
         public long? PeriodUnix { get; set; }
         public DateTimeOffset CreatedAt { get; set; }
+        public string? CreatorId { get; set; }
+        public string? CreatorDisplayName { get; set; }
     }
 }

@@ -6,6 +6,7 @@ public sealed class CreateChallengeRequest
     public string? Name { get; set; }
     public string? Family { get; set; }
     public string? Difficulty { get; set; }
+    public string? CreatorId { get; set; }
 }
 
 /// <summary>Challenge board metadata returned to clients.</summary>
@@ -17,4 +18,6 @@ public sealed class ChallengeDto
     public required string Difficulty { get; init; }
     public long? PeriodUnix { get; init; }
     public DateTimeOffset CreatedAt { get; init; }
+    public string? CreatorId { get; init; }
+    public string? CreatorDisplayName { get; init; }
 }

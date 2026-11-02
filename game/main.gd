@@ -6,6 +6,7 @@ const PlayDevice = preload("res://game/platform/play_device.gd")
 const ReplayActions = preload("res://game/replay/actions.gd")
 const ReplayFormat = preload("res://game/replay/replay_format.gd")
 const HighscoreConfig = preload("res://game/highscore/highscore_config.gd")
+const ChallengeConfig = preload("res://game/challenge/challenge_config.gd")
 const GameModes = preload("res://game/mode/game_modes.gd")
 const GameOptions = preload("res://game/options/game_options.gd")
 const Keybinds = preload("res://game/options/keybinds.gd")
@@ -180,6 +181,11 @@ var _mode_choice_rects: Array = []
 var _diff_choice_rects: Array = []
 ## Web only: hide the first-run controls overlay after the player has seen it once.
 var _help_seen := false
+## One-time tip after first soft drop when hard drop has never been used.
+var _hard_drop_hint_seen := false
+var _hard_drop_used := false
+var _hard_drop_hint_open := false
+var _hard_drop_hint_resume_rect := Rect2()
 
 var drop_timer := 0.0
 var lock_timer := 0.0
@@ -266,6 +272,8 @@ var _replay_clock_center := Vector2.ZERO
 var _starfield: ColorRect
 var _starfield_mat: ShaderMaterial
 var _replay_seeking := false
+## Editor-only F1 dump / F2 wipe overlay.
+var _editor_debug_lines: PackedStringArray = PackedStringArray()
 
 
 func _board_size() -> Vector2:
@@ -309,6 +317,7 @@ func _ready() -> void:
 		challenges.closed.connect(_on_challenge_overlay_closed)
 		challenges.start_requested.connect(_on_challenge_start_requested)
 	_load_help_seen()
+	_load_hard_drop_hint_prefs()
 	_layout()
 	_new_game()
 	# First-run help, then mode picker. Help-seen is stored in user:// (web + native).
@@ -458,6 +467,8 @@ func _new_game(seed_override: int = -1) -> void:
 	elapsed_seconds = 0.0
 	game_over = false
 	paused = false
+	_hard_drop_hint_open = false
+	_hard_drop_hint_resume_rect = Rect2()
 	help_open = false
 	score_open = false
 	options_open = false
@@ -515,11 +526,139 @@ func _challenge_active() -> bool:
 
 
 func _challenge_friends_unlocked() -> bool:
-	## Soft launch gate: only m0b sees create UI until challenges ship broadly.
+	## Soft launch gate: editor always, otherwise only m0b until challenges ship broadly.
+	if OS.has_feature("editor"):
+		return true
 	if highscores == null:
 		return false
 	var player := str(highscores.player_name).strip_edges()
 	return not player.is_empty() and player.to_lower() == "m0b"
+
+
+func _handle_editor_debug_keys(event: InputEvent) -> bool:
+	if not (event is InputEventKey and event.pressed and not event.echo):
+		return false
+	if _key_pressed(event, KEY_F1):
+		_editor_debug_lines = _build_editor_debug_dump()
+		queue_redraw()
+		return true
+	if _key_pressed(event, KEY_F2):
+		_editor_clear_player_data()
+		_editor_debug_lines = PackedStringArray([
+			"EDITOR DEBUG — player data cleared",
+			"highscore.cfg + challenge.cfg removed",
+			"runtime player name/id + active challenge reset",
+			"F1 dump again · F2 clear again",
+		])
+		queue_redraw()
+		return true
+	if _key_pressed(event, KEY_ESCAPE) and not _editor_debug_lines.is_empty():
+		_editor_debug_lines = PackedStringArray()
+		queue_redraw()
+		return true
+	return false
+
+
+func _build_editor_debug_dump() -> PackedStringArray:
+	var lines: PackedStringArray = PackedStringArray()
+	lines.append("EDITOR DEBUG (F1 dump · F2 clear player · Esc hide)")
+	lines.append("user_data: %s" % OS.get_user_data_dir())
+	lines.append("api: %s" % HighscoreConfig.API_BASE_URL)
+	lines.append(
+		"runtime name: %s"
+		% (str(highscores.player_name) if highscores != null else "(no highscores)")
+	)
+	lines.append("runtime player_id: %s" % HighscoreConfig.ensure_player_id())
+	lines.append(
+		"challenge_active: %s"
+		% ("yes" if _challenge_active() else "no")
+	)
+	lines.append(
+		"hard_drop_hint_seen: %s  hard_drop_used: %s"
+		% [str(_hard_drop_hint_seen), str(_hard_drop_used)]
+	)
+	if _challenge_active():
+		var data: Dictionary = challenges.active_data()
+		lines.append(
+			"active board: id=%s name=%s family=%s difficulty=%s period=%s"
+			% [
+				str(data.get("id", "")),
+				str(data.get("name", "")),
+				str(data.get("family", "")),
+				str(data.get("difficulty", "")),
+				str(data.get("periodUnix", 0)),
+			]
+		)
+	lines.append("--- %s ---" % HighscoreConfig.PLAYER_NAME_PATH)
+	lines.append_array(_editor_cfg_dump(HighscoreConfig.PLAYER_NAME_PATH))
+	lines.append("--- %s ---" % ChallengeConfig.CFG_PATH)
+	lines.append_array(_editor_cfg_dump(ChallengeConfig.CFG_PATH))
+	return lines
+
+
+func _editor_cfg_dump(path: String) -> PackedStringArray:
+	var lines: PackedStringArray = PackedStringArray()
+	var cfg := ConfigFile.new()
+	if cfg.load(path) != OK:
+		lines.append("(missing)")
+		return lines
+	var sections := cfg.get_sections()
+	if sections.is_empty():
+		lines.append("(empty)")
+		return lines
+	for section in sections:
+		for key in cfg.get_section_keys(section):
+			lines.append("%s/%s = %s" % [section, key, str(cfg.get_value(section, key))])
+	return lines
+
+
+func _editor_clear_player_data() -> void:
+	if challenges != null and challenges.is_active():
+		challenges.leave_challenge()
+	elif challenges != null:
+		ChallengeConfig.clear_active()
+		if challenges.has_method("close_overlay"):
+			challenges.close_overlay()
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(HighscoreConfig.PLAYER_NAME_PATH))
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(ChallengeConfig.CFG_PATH))
+	if highscores != null:
+		highscores.player_name = "Anonymous"
+		if highscores.has_method("clear_challenge_board"):
+			highscores.clear_challenge_board()
+	_challenge_period_unix = -1
+	game_mode = ""
+	_hard_drop_hint_open = false
+	_hard_drop_hint_seen = false
+	_hard_drop_used = false
+	_save_hard_drop_hint_prefs()
+	queue_redraw()
+
+
+func _draw_editor_debug(vp: Vector2) -> void:
+	if _editor_debug_lines.is_empty() or body_font == null:
+		return
+	var pad := 24.0
+	var font_size := 26
+	var line_h := body_font.get_ascent(font_size) + body_font.get_descent(font_size) + 8.0
+	var panel_h := minf(float(_editor_debug_lines.size()) * line_h + pad * 2.0, vp.y - 16.0)
+	var panel := Rect2(8.0, 8.0, minf(vp.x - 16.0, 1440.0), panel_h)
+	draw_rect(panel, Color(0.02, 0.04, 0.08, 0.92), true, -1.0, true)
+	draw_rect(panel, ColorTheme.accent(0.55), false, 1.5, true)
+	var y := panel.position.y + pad + body_font.get_ascent(font_size)
+	var max_y := panel.end.y - pad
+	for i in _editor_debug_lines.size():
+		if y > max_y:
+			break
+		draw_string(
+			body_font,
+			Vector2(panel.position.x + pad, y),
+			str(_editor_debug_lines[i]),
+			HORIZONTAL_ALIGNMENT_LEFT,
+			-1,
+			font_size,
+			ColorTheme.gold() if i == 0 else ColorTheme.text()
+		)
+		y += line_h
 
 
 func _on_challenge_activated(data: Dictionary) -> void:
@@ -623,6 +762,7 @@ func _overlay_blocks_play() -> bool:
 		or _highscores_open()
 		or _challenge_overlay_open()
 		or paused
+		or _hard_drop_hint_open
 	)
 
 
@@ -903,8 +1043,9 @@ func _grounded() -> bool:
 
 
 func _hard_drop() -> void:
-	if clear_timer > 0.0 or game_over or paused:
+	if clear_timer > 0.0 or game_over or paused or _hard_drop_hint_open:
 		return
+	_mark_hard_drop_used()
 	var from_cells: Array = _cells(piece_id, piece_rot, piece_pos)
 	var dist := 0
 	while _try_move(0, 1):
@@ -1045,6 +1186,150 @@ func _mark_help_seen() -> void:
 	cfg.load(UI_CONFIG_PATH)
 	cfg.set_value("help", "seen", true)
 	cfg.save(UI_CONFIG_PATH)
+
+
+func _load_hard_drop_hint_prefs() -> void:
+	_hard_drop_hint_seen = false
+	_hard_drop_used = false
+	var cfg := ConfigFile.new()
+	if cfg.load(UI_CONFIG_PATH) != OK:
+		return
+	_hard_drop_hint_seen = bool(cfg.get_value("tips", "hard_drop_hint_seen", false))
+	_hard_drop_used = bool(cfg.get_value("tips", "hard_drop_used", false))
+
+
+func _save_hard_drop_hint_prefs() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(UI_CONFIG_PATH)
+	cfg.set_value("tips", "hard_drop_hint_seen", _hard_drop_hint_seen)
+	cfg.set_value("tips", "hard_drop_used", _hard_drop_used)
+	cfg.save(UI_CONFIG_PATH)
+
+
+func _mark_hard_drop_used() -> void:
+	if _hard_drop_used:
+		return
+	_hard_drop_used = true
+	_save_hard_drop_hint_prefs()
+
+
+func _maybe_offer_hard_drop_hint() -> void:
+	if (
+		replay_mode
+		or _hard_drop_hint_open
+		or _hard_drop_hint_seen
+		or _hard_drop_used
+		or game_over
+		or paused
+		or help_open
+		or score_open
+		or options_open
+		or mode_select_open
+		or _awaiting_mode()
+		or _highscores_open()
+		or _challenge_overlay_open()
+	):
+		return
+	_hard_drop_hint_seen = true
+	_save_hard_drop_hint_prefs()
+	_hard_drop_hint_open = true
+	held_soft = false
+	held_left = false
+	held_right = false
+	soft_timer = 0.0
+	queue_redraw()
+
+
+func _dismiss_hard_drop_hint() -> void:
+	if not _hard_drop_hint_open:
+		return
+	_hard_drop_hint_open = false
+	_hard_drop_hint_resume_rect = Rect2()
+	_sync_hold_flags_from_input()
+	queue_redraw()
+
+
+func _handle_hard_drop_hint_input(event: InputEvent) -> bool:
+	if PlayDevice.has_pointer_down(event):
+		var point := PlayDevice.pointer_down_position(event)
+		_layout_hard_drop_hint(get_viewport_rect().size)
+		if (
+			_hard_drop_hint_resume_rect.size.x > 0.0
+			and _hard_drop_hint_resume_rect.has_point(point)
+		):
+			_dismiss_hard_drop_hint()
+			return true
+		return true
+	if not (event is InputEventKey and event.pressed and not event.echo):
+		return false
+	if (
+		_key_pressed(event, KEY_ENTER)
+		or _key_pressed(event, KEY_KP_ENTER)
+		or _key_pressed(event, KEY_SPACE)
+		or _key_pressed(event, KEY_ESCAPE)
+	):
+		_dismiss_hard_drop_hint()
+		return true
+	return true
+
+
+func _layout_hard_drop_hint(vp: Vector2) -> void:
+	var panel_w := minf(460.0 * ui_scale, vp.x - 24.0)
+	var panel_h := minf(280.0 * ui_scale, vp.y - 24.0)
+	var center := _board_center()
+	var panel := Rect2(center - Vector2(panel_w, panel_h) * 0.5, Vector2(panel_w, panel_h))
+	var btn_w := minf(220.0 * ui_scale, panel.size.x - 48.0 * ui_scale)
+	var btn_h := maxf(44.0, 48.0 * ui_scale)
+	_hard_drop_hint_resume_rect = Rect2(
+		panel.get_center().x - btn_w * 0.5,
+		panel.end.y - 24.0 * ui_scale - btn_h,
+		btn_w,
+		btn_h
+	)
+
+
+func _draw_hard_drop_hint(vp: Vector2) -> void:
+	_layout_hard_drop_hint(vp)
+	var center := _board_center()
+	draw_rect(Rect2(Vector2.ZERO, vp), Color(0, 0, 0, 0.62))
+	var panel_w := minf(460.0 * ui_scale, vp.x - 24.0)
+	var panel_h := minf(280.0 * ui_scale, vp.y - 24.0)
+	var panel := Rect2(center - Vector2(panel_w, panel_h) * 0.5, Vector2(panel_w, panel_h))
+	draw_rect(panel, ColorTheme.bg_panel(0.96), true, -1.0, true)
+	draw_rect(panel, ColorTheme.accent(0.55), false, 1.5, true)
+	var title_size_local := maxi(20, int(round(28 * ui_scale)))
+	var body_size := maxi(14, int(round(17 * ui_scale)))
+	var mid := panel.get_center()
+	_draw_centered_label(
+		mid,
+		"HARD DROP HINT",
+		title_font,
+		title_size_local,
+		ColorTheme.accent(),
+		panel.position.y + 36.0 * ui_scale - mid.y
+	)
+	var bind := Keybinds.keys_label(Keybinds.HARD_DROP)
+	var lines: PackedStringArray = PackedStringArray([
+		"Soft drop scores 1 point per cell.",
+		"Hard drop scores 2 points per cell and locks instantly.",
+		"Press %s to hard drop." % bind,
+	])
+	if PlayDevice.is_touch_primary():
+		lines.append("On touch, use the DROP control.")
+	var line_h := (
+		body_font.get_ascent(body_size) + body_font.get_descent(body_size) + 8.0 * ui_scale
+	)
+	var text_y := panel.position.y + 78.0 * ui_scale
+	for i in lines.size():
+		_draw_centered_label(
+			mid,
+			str(lines[i]),
+			body_font,
+			body_size,
+			ColorTheme.text(),
+			text_y + float(i) * line_h - mid.y
+		)
+	_draw_overlay_button(_hard_drop_hint_resume_rect, "RESUME")
 
 
 func _dismiss_help() -> void:
@@ -1238,6 +1523,7 @@ func _process(delta: float) -> void:
 	if not replay_mode and (
 		game_over
 		or paused
+		or _hard_drop_hint_open
 		or help_open
 		or score_open
 		or options_open
@@ -1268,6 +1554,7 @@ func _process(delta: float) -> void:
 			break
 		if not replay_mode and (
 			paused
+			or _hard_drop_hint_open
 			or help_open
 			or score_open
 			or options_open
@@ -1363,6 +1650,7 @@ func apply_action(action: String, record: bool = true) -> void:
 			held_right = false
 		ReplayActions.SOFT_ON:
 			held_soft = true
+			_maybe_offer_hard_drop_hint()
 		ReplayActions.SOFT_OFF:
 			held_soft = false
 		ReplayActions.ROT:
@@ -1391,6 +1679,7 @@ func _can_accept_play_action() -> bool:
 	return (
 		not game_over
 		and not paused
+		and not _hard_drop_hint_open
 		and not help_open
 		and not score_open
 		and not options_open
@@ -1787,6 +2076,18 @@ func _handle_touch_overlay(event: InputEvent) -> bool:
 		if not _awaiting_mode():
 			_new_game()
 		return true
+	if _hard_drop_hint_open:
+		if (
+			_hard_drop_hint_resume_rect.size.x > 0.0
+			and _hard_drop_hint_resume_rect.has_point(point)
+		):
+			_dismiss_hard_drop_hint()
+			if touch != null:
+				touch.suppress_play_taps()
+			return true
+		if touch != null:
+			touch.suppress_play_taps()
+		return true
 	if PlayDevice.is_touch_primary() and (help_open or score_open or options_open):
 		# Eat taps on the dimmed panel so they cannot fall through to play.
 		if touch != null:
@@ -1943,6 +2244,9 @@ func _handle_mode_select_keys(event: InputEvent) -> bool:
 
 
 func _input(event: InputEvent) -> void:
+	if OS.has_feature("editor") and _handle_editor_debug_keys(event):
+		get_viewport().set_input_as_handled()
+		return
 	# Name entry / submit owns the keyboard so game and music binds do not fire.
 	# Unhandled events stay unhandled so the touch name field can take them.
 	if highscores != null and highscores.is_capturing_input():
@@ -2141,6 +2445,10 @@ func _input(event: InputEvent) -> void:
 	):
 		get_viewport().set_input_as_handled()
 		return
+	if _hard_drop_hint_open:
+		if _handle_hard_drop_hint_input(event):
+			get_viewport().set_input_as_handled()
+		return
 	if paused:
 		if event.is_pressed() and not event.is_echo():
 			paused = false
@@ -2244,6 +2552,7 @@ func _draw() -> void:
 	_draw_side_panels()
 	_draw_hud()
 	_draw_overlays(vp)
+	_draw_editor_debug(vp)
 
 
 func _draw_backdrop(vp: Vector2) -> void:
@@ -3557,6 +3866,9 @@ func _handle_options_keys(event: InputEvent) -> bool:
 
 func _draw_overlays(vp: Vector2) -> void:
 	_sync_touch_overlay_rects()
+	if _hard_drop_hint_open and not replay_mode:
+		_draw_hard_drop_hint(vp)
+		return
 	if score_open:
 		_draw_info_table(vp, "SCORE", SCORE_HELP_ROWS, "S or Esc back to mode menu")
 		return

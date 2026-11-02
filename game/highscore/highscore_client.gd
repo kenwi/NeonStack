@@ -108,6 +108,7 @@ func _ready() -> void:
 	add_child(_name_edit)
 	apply_color_theme()
 	player_name = _load_player_name()
+	HighscoreConfig.ensure_player_id()
 	refresh_live_ranks()
 
 
@@ -1193,6 +1194,7 @@ func _submit_score() -> void:
 		"level": pending_level,
 		"elapsedSeconds": pending_elapsed,
 		"checksum": checksum,
+		"playerId": HighscoreConfig.ensure_player_id(),
 	}
 	phase = Phase.SUBMITTING
 	status_text = "Submitting..."

@@ -8,6 +8,7 @@ public static partial class ScoreSanitizer
 {
     public const int MaxPlayerNameLength = 16;
     public const int MaxModeIdLength = 64;
+    public const int PlayerIdLength = 22;
     public const int MaxScore = 10_000_000;
     public const int MaxLines = 10_000;
     public const int MinLevel = 1;
@@ -22,6 +23,9 @@ public static partial class ScoreSanitizer
 
     [GeneratedRegex(@"[^A-Za-z0-9_-]")]
     private static partial Regex InvalidModeIdChars();
+
+    [GeneratedRegex(@"[^A-Za-z0-9_-]")]
+    private static partial Regex InvalidPlayerIdChars();
 
     public static string SanitizePlayerName(string? name)
     {
@@ -46,6 +50,17 @@ public static partial class ScoreSanitizer
             trimmed = trimmed[..MaxModeIdLength];
 
         return InvalidModeIdChars().Replace(trimmed, string.Empty);
+    }
+
+    public static string SanitizePlayerId(string? playerId)
+    {
+        if (string.IsNullOrWhiteSpace(playerId))
+            return string.Empty;
+
+        var cleaned = InvalidPlayerIdChars().Replace(playerId.Trim(), string.Empty);
+        if (cleaned.Length != PlayerIdLength)
+            return string.Empty;
+        return cleaned;
     }
 
     public static bool TryValidateSubmission(ScoreSubmission submission, out string error)
@@ -79,6 +94,7 @@ public static partial class ScoreSanitizer
         LinesCleared = submission.LinesCleared,
         Level = submission.Level,
         ElapsedSeconds = submission.ElapsedSeconds,
-        Checksum = submission.Checksum
+        Checksum = submission.Checksum,
+        PlayerId = SanitizePlayerId(submission.PlayerId)
     };
 }

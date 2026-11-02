@@ -359,6 +359,7 @@ func _can_play() -> bool:
 	return (
 		not main.game_over
 		and not main.paused
+		and not bool(main.get("_hard_drop_hint_open"))
 		and not main.help_open
 		and not main.score_open
 		and not main.mode_select_open

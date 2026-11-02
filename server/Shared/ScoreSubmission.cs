@@ -10,4 +10,6 @@ public sealed class ScoreSubmission
     public int Level { get; set; }
     public float ElapsedSeconds { get; set; }
     public string Checksum { get; set; } = string.Empty;
+    /// <summary>Optional device-local player id; not part of checksum.</summary>
+    public string? PlayerId { get; set; }
 }

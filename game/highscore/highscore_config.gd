@@ -11,8 +11,46 @@ const MAX_PLAYER_NAME_LENGTH := 16
 const PLAYER_NAME_PATH := "user://highscore.cfg"
 const PLAYER_NAME_SECTION := "player"
 const PLAYER_NAME_KEY := "name"
+const PLAYER_ID_KEY := "id"
+const PLAYER_ID_LENGTH := 22
 const GREETINGS_SECTION := "greetings"
 const GREETINGS_ENABLED_KEY := "enabled"
+
+const _PLAYER_ID_ALPHABET := "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"
+
+
+## Load or create a once-per-device opaque player id (persisted in highscore.cfg).
+static func ensure_player_id() -> String:
+	var cfg := ConfigFile.new()
+	cfg.load(PLAYER_NAME_PATH)
+	var existing := sanitize_player_id(str(cfg.get_value(PLAYER_NAME_SECTION, PLAYER_ID_KEY, "")))
+	if not existing.is_empty():
+		return existing
+	var generated := _generate_player_id()
+	cfg.set_value(PLAYER_NAME_SECTION, PLAYER_ID_KEY, generated)
+	cfg.save(PLAYER_NAME_PATH)
+	return generated
+
+
+static func sanitize_player_id(raw: String) -> String:
+	var trimmed := raw.strip_edges()
+	var out := ""
+	for i in trimmed.length():
+		var ch := trimmed.substr(i, 1)
+		if _PLAYER_ID_ALPHABET.find(ch) < 0:
+			continue
+		out += ch
+		if out.length() >= PLAYER_ID_LENGTH:
+			break
+	return out if out.length() == PLAYER_ID_LENGTH else ""
+
+
+static func _generate_player_id() -> String:
+	var out := ""
+	var alphabet_len := _PLAYER_ID_ALPHABET.length()
+	for _i in PLAYER_ID_LENGTH:
+		out += _PLAYER_ID_ALPHABET.substr(randi() % alphabet_len, 1)
+	return out
 
 
 ## Space thousand separators: 10000 -> "10 000".
