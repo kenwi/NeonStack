@@ -418,6 +418,35 @@ func _release_all() -> void:
 	queue_redraw()
 
 
+func button_scale() -> int:
+	return _scale
+
+
+func button_scale_label() -> String:
+	return "%dx" % _scale
+
+
+func cycle_button_scale() -> void:
+	_set_scale(_scale + 1 if _scale < SCALE_MAX else SCALE_MIN)
+
+
+func zones_visible() -> bool:
+	return _show_zones
+
+
+func toggle_zones() -> void:
+	_show_zones = not _show_zones
+	_save_prefs()
+	queue_redraw()
+
+
+func reset_prefs() -> void:
+	_show_zones = false
+	_set_scale(SCALE_DEFAULT)
+	_save_prefs()
+	queue_redraw()
+
+
 func _set_scale(next: int) -> void:
 	next = clampi(next, SCALE_MIN, SCALE_MAX)
 	if next == _scale:

@@ -7,6 +7,8 @@ const ReplayActions = preload("res://game/replay/actions.gd")
 const ReplayFormat = preload("res://game/replay/replay_format.gd")
 const HighscoreConfig = preload("res://game/highscore/highscore_config.gd")
 const GameModes = preload("res://game/mode/game_modes.gd")
+const GameOptions = preload("res://game/options/game_options.gd")
+const Keybinds = preload("res://game/options/keybinds.gd")
 const ColorTheme = preload("res://game/theme/color_theme.gd")
 
 const COLS := 10
@@ -160,6 +162,10 @@ var game_over := false
 var paused := false
 var help_open := false
 var score_open := false
+var options_open := false
+## Empty = not listening; otherwise a Keybinds action id awaiting a new key.
+var _rebind_action_id := ""
+var _settings_scroll := 0.0
 var mode_select_open := false
 ## True when Esc opened the menu over a live run that can be resumed.
 var _menu_can_resume := false
@@ -238,6 +244,11 @@ var _touch_restart_rect := Rect2()
 var _mode_play_rect := Rect2()
 var _mode_help_rect := Rect2()
 var _mode_scores_rect := Rect2()
+var _mode_options_rect := Rect2()
+var _option_row_rects: Array = []
+## Parallel to _option_row_rects: {kind, id}.
+var _settings_row_meta: Array = []
+var _settings_reset_rect := Rect2()
 var _replay_close_rect := Rect2()
 var _replay_speed_rect := Rect2()
 var _replay_scrub_back_large_rect := Rect2()
@@ -282,6 +293,7 @@ func _ready() -> void:
 	title_font = ThemeDB.fallback_font
 	body_font = ThemeDB.fallback_font
 	ColorTheme.ensure_loaded()
+	Keybinds.ensure_loaded()
 	_load_backdrop_prefs()
 	_setup_starfield()
 	_load_leaderboard_greetings()
@@ -435,6 +447,7 @@ func _new_game(seed_override: int = -1) -> void:
 	paused = false
 	help_open = false
 	score_open = false
+	options_open = false
 	clear_flash.clear()
 	clear_timer = 0.0
 	lock_timer = 0.0
@@ -485,11 +498,18 @@ func _awaiting_mode() -> bool:
 
 
 func _overlay_blocks_play() -> bool:
-	return help_open or score_open or mode_select_open or _highscores_open() or paused
+	return (
+		help_open
+		or score_open
+		or options_open
+		or mode_select_open
+		or _highscores_open()
+		or paused
+	)
 
 
 func _open_mode_select_if_needed() -> void:
-	if _awaiting_mode() and not help_open and not score_open:
+	if _awaiting_mode() and not help_open and not score_open and not options_open:
 		_menu_can_resume = false
 		_sync_mode_select_picks_from_run()
 		mode_select_open = true
@@ -521,6 +541,7 @@ func _mode_select_primary_label() -> String:
 func _open_mode_select_menu() -> void:
 	help_open = false
 	score_open = false
+	options_open = false
 	paused = false
 	if highscores != null and highscores.is_showing_overlay() and not highscores.is_capturing_input():
 		highscores.close_overlay()
@@ -535,9 +556,11 @@ func _open_mode_select_menu() -> void:
 
 
 func _return_from_overlay_to_mode_select() -> void:
-	## Help / leaderboard Esc (and close) always lands back on the mode menu.
+	## Help / settings / leaderboard Esc (and close) always lands back on the mode menu.
 	help_open = false
 	score_open = false
+	options_open = false
+	_rebind_action_id = ""
 	paused = false
 	if highscores != null and highscores.is_showing_overlay() and not highscores.is_capturing_input():
 		highscores.close_overlay()
@@ -556,6 +579,19 @@ func _open_help_from_mode_select() -> void:
 	mode_select_open = false
 	help_open = true
 	score_open = false
+	options_open = false
+	if highscores != null:
+		highscores.close_overlay()
+	queue_redraw()
+
+
+func _open_options_from_mode_select() -> void:
+	mode_select_open = false
+	help_open = false
+	score_open = false
+	options_open = true
+	_rebind_action_id = ""
+	_settings_scroll = 0.0
 	if highscores != null:
 		highscores.close_overlay()
 	queue_redraw()
@@ -565,6 +601,7 @@ func _open_leaderboard_from_mode_select() -> void:
 	mode_select_open = false
 	help_open = false
 	score_open = false
+	options_open = false
 	if highscores == null:
 		return
 	var family := _mode_family_at(_mode_pick_index)
@@ -577,7 +614,7 @@ func _open_leaderboard_from_mode_select() -> void:
 
 
 func _on_leaderboard_closed() -> void:
-	if mode_select_open or help_open or score_open:
+	if mode_select_open or help_open or score_open or options_open:
 		return
 	if highscores != null and highscores.is_capturing_input():
 		return
@@ -618,6 +655,7 @@ func _confirm_game_mode(mode: String, diff: String = "") -> void:
 	_menu_can_resume = false
 	help_open = false
 	score_open = false
+	options_open = false
 	if highscores != null and highscores.has_method("set_game_mode"):
 		highscores.set_game_mode(game_mode, -1, difficulty)
 	_new_game()
@@ -882,6 +920,68 @@ func _dismiss_help() -> void:
 	help_open = false
 
 
+func _is_fullscreen() -> bool:
+	var mode := DisplayServer.window_get_mode()
+	return (
+		mode == DisplayServer.WINDOW_MODE_FULLSCREEN
+		or mode == DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN
+	)
+
+
+func _option_value_label(id: String) -> String:
+	match id:
+		GameOptions.ID_FULLSCREEN:
+			return "On" if _is_fullscreen() else "Off"
+		GameOptions.ID_JUICE:
+			if juice != null and juice.has_method("is_enabled"):
+				return "On" if juice.is_enabled() else "Off"
+			return "On"
+		GameOptions.ID_BACKDROP:
+			return _backdrop_mode_label()
+		GameOptions.ID_THEME:
+			return ColorTheme.label()
+		GameOptions.ID_GREETINGS:
+			return "On" if leaderboard_greetings else "Off"
+		GameOptions.ID_MUTE:
+			if music != null and music.has_method("is_muted"):
+				return "Muted" if music.is_muted() else "On"
+			return "On"
+		GameOptions.ID_TOUCH_SCALE:
+			if touch != null and touch.has_method("button_scale_label"):
+				return str(touch.button_scale_label())
+			return "2x"
+		GameOptions.ID_TOUCH_ZONES:
+			if touch != null and touch.has_method("zones_visible"):
+				return "On" if touch.zones_visible() else "Off"
+			return "Off"
+		_:
+			return ""
+
+
+func _activate_option(id: String) -> void:
+	match id:
+		GameOptions.ID_FULLSCREEN:
+			_toggle_fullscreen()
+		GameOptions.ID_JUICE:
+			toggle_juice()
+		GameOptions.ID_BACKDROP:
+			cycle_backdrop()
+		GameOptions.ID_THEME:
+			cycle_theme()
+		GameOptions.ID_GREETINGS:
+			_toggle_leaderboard_greetings()
+		GameOptions.ID_MUTE:
+			if music != null and music.has_method("toggle_mute"):
+				music.toggle_mute()
+		GameOptions.ID_TOUCH_SCALE:
+			if touch != null and touch.has_method("cycle_button_scale"):
+				touch.cycle_button_scale()
+		GameOptions.ID_TOUCH_ZONES:
+			if touch != null and touch.has_method("toggle_zones"):
+				touch.toggle_zones()
+	queue_redraw()
+
+
 func cycle_theme() -> void:
 	var theme_name := ColorTheme.cycle()
 	_sync_starfield()
@@ -1003,6 +1103,7 @@ func _process(delta: float) -> void:
 		or paused
 		or help_open
 		or score_open
+		or options_open
 		or mode_select_open
 		or _highscores_open()
 		or _awaiting_mode()
@@ -1027,7 +1128,14 @@ func _process(delta: float) -> void:
 		guard += 1
 		if game_over:
 			break
-		if not replay_mode and (paused or help_open or score_open or mode_select_open or _highscores_open()):
+		if not replay_mode and (
+			paused
+			or help_open
+			or score_open
+			or options_open
+			or mode_select_open
+			or _highscores_open()
+		):
 			break
 	queue_redraw()
 
@@ -1146,6 +1254,7 @@ func _can_accept_play_action() -> bool:
 		and not paused
 		and not help_open
 		and not score_open
+		and not options_open
 		and not mode_select_open
 		and not _awaiting_mode()
 		and clear_timer <= 0.0
@@ -1177,6 +1286,7 @@ func start_replay_from_data(data: Dictionary) -> bool:
 	_new_game(replay_player.get_seed())
 	help_open = false
 	score_open = false
+	options_open = false
 	mode_select_open = false
 	paused = false
 	queue_redraw()
@@ -1204,6 +1314,7 @@ func fast_forward_replay_until_done() -> bool:
 	paused = false
 	help_open = false
 	score_open = false
+	options_open = false
 	mode_select_open = false
 	var prev_quiet: bool = bool(replay_player.quiet_mismatch)
 	replay_player.quiet_mismatch = true
@@ -1276,6 +1387,7 @@ func _replay_seek_to_tick(target_tick: int) -> void:
 	paused = false
 	help_open = false
 	score_open = false
+	options_open = false
 	mode_select_open = false
 	if juice != null:
 		juice.begin_silent()
@@ -1493,7 +1605,7 @@ func _quit_game() -> void:
 func _help_rows() -> Array:
 	if PlayDevice.is_touch_primary():
 		return HELP_TOUCH
-	return HELP_KEYS
+	return Keybinds.help_rows()
 
 
 func _handle_touch_overlay(event: InputEvent) -> bool:
@@ -1508,9 +1620,12 @@ func _handle_touch_overlay(event: InputEvent) -> bool:
 		return true
 	if mode_select_open and _handle_mode_select_pointer(point):
 		return true
+	if options_open and _handle_options_pointer(point):
+		return true
 	if _touch_close_rect.size.x > 0.0 and _touch_close_rect.has_point(point):
 		_dismiss_help()
 		score_open = false
+		options_open = false
 		_return_from_overlay_to_mode_select()
 		if touch != null:
 			touch.suppress_play_taps()
@@ -1520,12 +1635,13 @@ func _handle_touch_overlay(event: InputEvent) -> bool:
 		if not _awaiting_mode():
 			_new_game()
 		return true
-	if PlayDevice.is_touch_primary() and (help_open or score_open):
+	if PlayDevice.is_touch_primary() and (help_open or score_open or options_open):
 		# Eat taps on the dimmed panel so they cannot fall through to play.
 		if touch != null:
 			touch.suppress_play_taps()
 		_dismiss_help()
 		score_open = false
+		options_open = false
 		_return_from_overlay_to_mode_select()
 		queue_redraw()
 		return true
@@ -1560,6 +1676,9 @@ func _handle_mode_select_pointer(point: Vector2) -> bool:
 		return true
 	if _mode_scores_rect.size.x > 0.0 and _mode_scores_rect.has_point(point):
 		_open_leaderboard_from_mode_select()
+		return true
+	if _mode_options_rect.size.x > 0.0 and _mode_options_rect.has_point(point):
+		_open_options_from_mode_select()
 		return true
 	return true
 
@@ -1622,14 +1741,18 @@ func _handle_mode_select_keys(event: InputEvent) -> bool:
 		_mode_focus_row = 1
 		queue_redraw()
 		return true
-	if _key_pressed(event, KEY_H):
+	if Keybinds.matches_pressed(event, Keybinds.HELP):
 		_open_help_from_mode_select()
 		return true
-	if _key_pressed(event, KEY_L):
+	if Keybinds.matches_pressed(event, Keybinds.HIGHSCORES):
 		_open_leaderboard_from_mode_select()
 		return true
+	if _key_pressed(event, KEY_O):
+		_open_options_from_mode_select()
+		return true
 	if (
-		_key_pressed(event, KEY_SPACE)
+		Keybinds.matches_pressed(event, Keybinds.HARD_DROP)
+		or _key_pressed(event, KEY_SPACE)
 		or _key_pressed(event, KEY_ENTER)
 		or _key_pressed(event, KEY_KP_ENTER)
 	):
@@ -1656,6 +1779,14 @@ func _input(event: InputEvent) -> void:
 		if _handle_mode_select_keys(event):
 			get_viewport().set_input_as_handled()
 			return
+	if options_open:
+		# Rebind capture must win over music / global shortcuts.
+		if _handle_options_keys(event):
+			get_viewport().set_input_as_handled()
+			return
+		if music != null and music.handle_input(event):
+			get_viewport().set_input_as_handled()
+			return
 	if touch != null and touch.handle_input(event):
 		get_viewport().set_input_as_handled()
 		return
@@ -1666,9 +1797,10 @@ func _input(event: InputEvent) -> void:
 		if _highscores_open():
 			_dismiss_help()
 			score_open = false
+			options_open = false
 		get_viewport().set_input_as_handled()
 		return
-	if _key_pressed(event, KEY_H):
+	if Keybinds.matches_pressed(event, Keybinds.HELP):
 		if help_open:
 			_dismiss_help()
 			_return_from_overlay_to_mode_select()
@@ -1677,13 +1809,21 @@ func _input(event: InputEvent) -> void:
 		else:
 			help_open = true
 			score_open = false
+			options_open = false
 			mode_select_open = false
 			if highscores != null:
 				highscores.close_overlay()
 			queue_redraw()
 		get_viewport().set_input_as_handled()
 		return
-	if _key_pressed(event, KEY_S):
+	if _key_pressed(event, KEY_O):
+		if options_open:
+			_return_from_overlay_to_mode_select()
+		elif mode_select_open:
+			_open_options_from_mode_select()
+		get_viewport().set_input_as_handled()
+		return
+	if Keybinds.matches_pressed(event, Keybinds.SCORE_TABLE):
 		if mode_select_open or _awaiting_mode():
 			get_viewport().set_input_as_handled()
 			return
@@ -1692,6 +1832,7 @@ func _input(event: InputEvent) -> void:
 			_return_from_overlay_to_mode_select()
 		else:
 			score_open = true
+			options_open = false
 			_dismiss_help()
 			mode_select_open = false
 			if highscores != null:
@@ -1699,19 +1840,19 @@ func _input(event: InputEvent) -> void:
 			queue_redraw()
 		get_viewport().set_input_as_handled()
 		return
-	if _key_pressed(event, KEY_F) or _key_pressed(event, KEY_F11):
+	if Keybinds.matches_pressed(event, Keybinds.FULLSCREEN):
 		_toggle_fullscreen()
 		get_viewport().set_input_as_handled()
 		return
-	if _key_pressed(event, KEY_J):
+	if Keybinds.matches_pressed(event, Keybinds.JUICE):
 		toggle_juice()
 		get_viewport().set_input_as_handled()
 		return
-	if _key_pressed(event, KEY_B):
+	if Keybinds.matches_pressed(event, Keybinds.BACKDROP):
 		cycle_backdrop()
 		get_viewport().set_input_as_handled()
 		return
-	if _key_pressed(event, KEY_T):
+	if Keybinds.matches_pressed(event, Keybinds.THEME):
 		cycle_theme()
 		get_viewport().set_input_as_handled()
 		return
@@ -1723,22 +1864,30 @@ func _input(event: InputEvent) -> void:
 		queue_redraw()
 		get_viewport().set_input_as_handled()
 		return
-	if _key_pressed(event, KEY_G):
+	if Keybinds.matches_pressed(event, Keybinds.GREETINGS):
 		_toggle_leaderboard_greetings()
 		get_viewport().set_input_as_handled()
 		return
-	if _key_pressed(event, KEY_Q):
+	if Keybinds.matches_pressed(event, Keybinds.QUIT):
 		_quit_game()
 		get_viewport().set_input_as_handled()
 		return
-	if _key_pressed(event, KEY_R):
+	if Keybinds.matches_pressed(event, Keybinds.RESTART):
 		if replay_mode:
 			stop_replay()
 		elif not _awaiting_mode() and not mode_select_open:
 			_new_game()
 		get_viewport().set_input_as_handled()
 		return
-	if event.is_action_pressed("ui_cancel"):
+	if Keybinds.matches_pressed(event, Keybinds.HIGHSCORES):
+		if mode_select_open:
+			_open_leaderboard_from_mode_select()
+			get_viewport().set_input_as_handled()
+			return
+	if (
+		event.is_action_pressed("ui_cancel")
+		or Keybinds.matches_pressed(event, Keybinds.PAUSE_MENU)
+	):
 		if replay_mode:
 			stop_replay()
 			get_viewport().set_input_as_handled()
@@ -1749,9 +1898,10 @@ func _input(event: InputEvent) -> void:
 				_close_mode_select_to_game()
 			get_viewport().set_input_as_handled()
 			return
-		if help_open or score_open:
+		if help_open or score_open or options_open:
 			_dismiss_help()
 			score_open = false
+			options_open = false
 			_return_from_overlay_to_mode_select()
 		elif _highscores_open() and highscores != null and not highscores.is_capturing_input():
 			if highscores.has_method("_close_leaderboard_for_user"):
@@ -1765,7 +1915,7 @@ func _input(event: InputEvent) -> void:
 		elif game_over:
 			_quit_game()
 		else:
-			# Esc opens the mode menu over a running (or paused) game.
+			# Mode-menu key opens the picker over a running (or paused) game.
 			_open_mode_select_menu()
 		queue_redraw()
 		get_viewport().set_input_as_handled()
@@ -1777,11 +1927,7 @@ func _input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		return
 	if game_over:
-		if (
-			_key_pressed(event, KEY_SPACE)
-			or _key_pressed(event, KEY_ENTER)
-			or _key_pressed(event, KEY_KP_ENTER)
-		):
+		if Keybinds.matches_pressed(event, Keybinds.HARD_DROP):
 			if not _awaiting_mode():
 				_new_game()
 			get_viewport().set_input_as_handled()
@@ -1792,17 +1938,13 @@ func _input(event: InputEvent) -> void:
 	if _handle_hold_action_event(event, not overlay_blocks_play):
 		get_viewport().set_input_as_handled()
 		return
-	if help_open and (
-		_key_pressed(event, KEY_SPACE)
-		or _key_pressed(event, KEY_ENTER)
-		or _key_pressed(event, KEY_KP_ENTER)
-	):
+	if help_open and Keybinds.matches_pressed(event, Keybinds.HARD_DROP):
 		_dismiss_help()
 		_return_from_overlay_to_mode_select()
 		queue_redraw()
 		get_viewport().set_input_as_handled()
 		return
-	if help_open or score_open or mode_select_open or _highscores_open():
+	if help_open or score_open or options_open or mode_select_open or _highscores_open():
 		get_viewport().set_input_as_handled()
 		return
 	if paused:
@@ -1821,44 +1963,40 @@ func _input(event: InputEvent) -> void:
 
 
 func _handle_hold_action_event(event: InputEvent, allow_press: bool) -> bool:
-	if event.is_action_released("ui_left"):
+	if Keybinds.matches_released(event, Keybinds.MOVE_LEFT):
 		apply_action(ReplayActions.LEFT_OFF)
 		return true
-	if event.is_action_released("ui_right"):
+	if Keybinds.matches_released(event, Keybinds.MOVE_RIGHT):
 		apply_action(ReplayActions.RIGHT_OFF)
 		return true
-	if event.is_action_released("ui_down"):
+	if Keybinds.matches_released(event, Keybinds.SOFT_DROP):
 		apply_action(ReplayActions.SOFT_OFF)
 		return true
 	if not allow_press:
 		return false
-	if event.is_action_pressed("ui_left"):
+	if Keybinds.matches_pressed(event, Keybinds.MOVE_LEFT):
 		apply_action(ReplayActions.LEFT_ON)
 		return true
-	if event.is_action_pressed("ui_right"):
+	if Keybinds.matches_pressed(event, Keybinds.MOVE_RIGHT):
 		apply_action(ReplayActions.RIGHT_ON)
 		return true
-	if event.is_action_pressed("ui_down"):
+	if Keybinds.matches_pressed(event, Keybinds.SOFT_DROP):
 		apply_action(ReplayActions.SOFT_ON)
 		return true
 	return false
 
 
 func _handle_discrete_gameplay_action_event(event: InputEvent) -> bool:
-	if event.is_action_pressed("ui_up") or _key_pressed(event, KEY_X):
+	if Keybinds.matches_pressed(event, Keybinds.ROTATE):
 		apply_action(ReplayActions.ROT)
 		return true
-	if _key_pressed(event, KEY_Z):
+	if Keybinds.matches_pressed(event, Keybinds.ROTATE_CCW):
 		apply_action(ReplayActions.CCW)
 		return true
-	if (
-		_key_pressed(event, KEY_SPACE)
-		or _key_pressed(event, KEY_ENTER)
-		or _key_pressed(event, KEY_KP_ENTER)
-	):
+	if Keybinds.matches_pressed(event, Keybinds.HARD_DROP):
 		apply_action(ReplayActions.DROP)
 		return true
-	if _key_pressed(event, KEY_C) or _key_pressed(event, KEY_SHIFT):
+	if Keybinds.matches_pressed(event, Keybinds.HOLD):
 		apply_action(ReplayActions.HOLD)
 		return true
 	return false
@@ -1868,13 +2006,13 @@ func _handle_discrete_gameplay_action_event(event: InputEvent) -> bool:
 func _sync_hold_flags_from_input() -> void:
 	if replay_mode or game_over:
 		return
-	_sync_hold_flag("ui_left", held_left, ReplayActions.LEFT_ON, ReplayActions.LEFT_OFF)
-	_sync_hold_flag("ui_right", held_right, ReplayActions.RIGHT_ON, ReplayActions.RIGHT_OFF)
-	_sync_hold_flag("ui_down", held_soft, ReplayActions.SOFT_ON, ReplayActions.SOFT_OFF)
+	_sync_hold_flag(Keybinds.MOVE_LEFT, held_left, ReplayActions.LEFT_ON, ReplayActions.LEFT_OFF)
+	_sync_hold_flag(Keybinds.MOVE_RIGHT, held_right, ReplayActions.RIGHT_ON, ReplayActions.RIGHT_OFF)
+	_sync_hold_flag(Keybinds.SOFT_DROP, held_soft, ReplayActions.SOFT_ON, ReplayActions.SOFT_OFF)
 
 
-func _sync_hold_flag(action_name: String, is_held: bool, on_action: String, off_action: String) -> void:
-	var down := Input.is_action_pressed(action_name)
+func _sync_hold_flag(action_id: String, is_held: bool, on_action: String, off_action: String) -> void:
+	var down := Keybinds.is_down(action_id)
 	if down and not is_held:
 		apply_action(on_action)
 	elif not down and is_held:
@@ -2192,7 +2330,7 @@ func _draw_side_panels() -> void:
 func _draw_hud() -> void:
 	draw_string(title_font, title_pos, "NEON STACK", HORIZONTAL_ALIGNMENT_LEFT, -1, title_size, ColorTheme.accent())
 	var mode_label := ""
-	if not game_mode.is_empty() and not mode_select_open and not help_open:
+	if not game_mode.is_empty() and not mode_select_open and not help_open and not options_open:
 		mode_label = str(GameModes.FAMILY_LABELS.get(game_mode, game_mode))
 		if game_mode == GameModes.DAILY or game_mode == GameModes.WEEKLY:
 			mode_label = "%s %s" % [mode_label, GameModes.period_label(game_mode)]
@@ -2442,13 +2580,20 @@ func _sync_touch_overlay_rects() -> void:
 	_mode_play_rect = Rect2()
 	_mode_help_rect = Rect2()
 	_mode_scores_rect = Rect2()
+	_mode_options_rect = Rect2()
 	_mode_choice_rects.clear()
 	_diff_choice_rects.clear()
+	_option_row_rects.clear()
+	_settings_row_meta.clear()
+	_settings_reset_rect = Rect2()
 	if title_font == null or body_font == null:
 		return
 	var vp := get_viewport_rect().size
 	if mode_select_open:
 		_layout_mode_select(vp)
+	elif options_open:
+		var layout := _layout_options(vp)
+		_touch_close_rect = layout["close"]
 	elif help_open or score_open:
 		var title := "CONTROLS" if help_open else "SCORE"
 		var rows: Array = _help_rows() if help_open else SCORE_HELP_ROWS
@@ -2497,6 +2642,7 @@ func _layout_mode_select(vp: Vector2) -> Dictionary:
 	_mode_play_rect = Rect2()
 	_mode_help_rect = Rect2()
 	_mode_scores_rect = Rect2()
+	_mode_options_rect = Rect2()
 	var title_size_local := help_title_size
 	var row_size := help_row_size
 	var section_size := maxi(11, int(round(float(hint_size) * 0.9)))
@@ -2508,10 +2654,10 @@ func _layout_mode_select(vp: Vector2) -> Dictionary:
 	var choice_h := maxf(44.0, 48.0 * ui_scale)
 	var diff_h := maxf(40.0, 44.0 * ui_scale)
 	var play_h := 48.0
-	## Secondary row (Help / Scores; Options later) sits above the primary CTA.
+	## Secondary row (Help / Scores / Settings) sits above the primary CTA.
 	var link_h := maxf(38.0, 42.0 * ui_scale)
 	var link_gap := 8.0 * ui_scale
-	var link_count := 2
+	var link_count := 3
 	var title_h := title_font.get_ascent(title_size_local) + title_font.get_descent(title_size_local)
 	var section_h := body_font.get_ascent(section_size) + body_font.get_descent(section_size)
 	var line_h := body_font.get_ascent(hint_size_local) + body_font.get_descent(hint_size_local) + 4.0 * ui_scale
@@ -2579,6 +2725,12 @@ func _layout_mode_select(vp: Vector2) -> Dictionary:
 	var link_x := panel.position.x + pad_x
 	_mode_help_rect = Rect2(link_x, link_y, link_w, link_h)
 	_mode_scores_rect = Rect2(link_x + link_w + link_gap, link_y, link_w, link_h)
+	_mode_options_rect = Rect2(
+		link_x + (link_w + link_gap) * 2.0,
+		link_y,
+		link_w,
+		link_h
+	)
 	_mode_play_rect = Rect2(
 		panel.position.x + (panel.size.x - button_w) * 0.5,
 		_mode_help_rect.end.y + 10.0 * ui_scale,
@@ -2722,6 +2874,8 @@ func _draw_mode_select(vp: Vector2) -> void:
 		_draw_overlay_button(_mode_help_rect, "HELP")
 	if _mode_scores_rect.size.x > 0.0:
 		_draw_overlay_button(_mode_scores_rect, "SCORES")
+	if _mode_options_rect.size.x > 0.0:
+		_draw_overlay_button(_mode_options_rect, "SETTINGS")
 	if _mode_play_rect.size.x > 0.0:
 		_draw_overlay_button(_mode_play_rect, _mode_select_primary_label())
 	if footer_h > 0.0:
@@ -2729,9 +2883,9 @@ func _draw_mode_select(vp: Vector2) -> void:
 		if PlayDevice.is_touch_primary():
 			footer = "Esc resume" if _menu_can_resume else ""
 		elif _menu_can_resume:
-			footer = "H help  L scores  Esc resume  Enter"
+			footer = "H help  L scores  O settings  Esc resume  Enter"
 		else:
-			footer = "H help  L scores  1-3 mode  Enter start"
+			footer = "H help  L scores  O settings  1-3 mode  Enter start"
 		if not footer.is_empty():
 			var footer_w := body_font.get_string_size(footer, HORIZONTAL_ALIGNMENT_LEFT, -1, hint_size).x
 			var footer_y := panel.end.y - pad_bottom + body_font.get_ascent(hint_size) - footer_h + 4.0 * ui_scale
@@ -2746,6 +2900,416 @@ func _draw_mode_select(vp: Vector2) -> void:
 			)
 
 
+func _settings_build_rows() -> Array:
+	var rows: Array = []
+	rows.append({"kind": "header", "id": "", "title": "DISPLAY", "blurb": ""})
+	for entry in GameOptions.entries(PlayDevice.is_touch_primary()):
+		rows.append({
+			"kind": "toggle",
+			"id": str(entry.get("id", "")),
+			"title": str(entry.get("title", "")),
+			"blurb": str(entry.get("blurb", "")),
+		})
+	# Keyboard remapping is desktop-only; touch uses on-screen controls.
+	if not PlayDevice.is_touch_primary():
+		rows.append({"kind": "header", "id": "", "title": "KEYBINDINGS", "blurb": ""})
+		for entry in Keybinds.entries():
+			rows.append({
+				"kind": "keybind",
+				"id": str(entry.get("id", "")),
+				"title": str(entry.get("title", "")),
+				"blurb": str(entry.get("blurb", "")),
+			})
+	rows.append({
+		"kind": "reset",
+		"id": "reset_all",
+		"title": "Reset all settings",
+		"blurb": "Restore display defaults"
+			+ ("" if PlayDevice.is_touch_primary() else " and keybindings")
+			+ ".",
+	})
+	return rows
+
+
+func _reset_all_settings() -> void:
+	_rebind_action_id = ""
+	if juice != null and juice.has_method("set_enabled"):
+		juice.set_enabled(true)
+	backdrop_mode = BackdropMode.HORIZON
+	_save_backdrop_prefs()
+	_sync_starfield()
+	ColorTheme.reset_to_default()
+	if highscores != null and highscores.has_method("apply_color_theme"):
+		highscores.apply_color_theme()
+	leaderboard_greetings = true
+	_save_leaderboard_greetings()
+	if music != null and music.has_method("reset_audio_prefs"):
+		music.reset_audio_prefs()
+	if touch != null and touch.has_method("reset_prefs"):
+		touch.reset_prefs()
+	if not PlayDevice.is_touch_primary():
+		Keybinds.reset_to_defaults()
+	if touch != null:
+		touch.queue_redraw()
+	if juice != null:
+		juice.queue_redraw()
+	if highscores != null:
+		highscores.queue_redraw()
+	if music != null and music.has_method("show_status"):
+		music.show_status("Settings reset")
+	queue_redraw()
+
+
+func _layout_options(vp: Vector2) -> Dictionary:
+	_option_row_rects.clear()
+	_settings_row_meta.clear()
+	_settings_reset_rect = Rect2()
+	var rows: Array = _settings_build_rows()
+	var touch_ui := PlayDevice.is_touch_primary()
+	var title_size_local := help_title_size
+	var title_h := title_font.get_ascent(title_size_local) + title_font.get_descent(title_size_local)
+	var section_size := maxi(11, int(round(float(hint_size) * 0.95)))
+	var label_size := maxi(13, int(round(float(help_row_size) * 0.95)))
+	var blurb_size := maxi(11, int(round(float(hint_size) * 0.92)))
+	var pad_x := 24.0 * ui_scale
+	var pad_top := 22.0 * ui_scale
+	var pad_bottom := 22.0 * ui_scale
+	var row_gap := 6.0 * ui_scale
+	var row_pad_y := 8.0 * ui_scale
+	var text_pad_x := 12.0 * ui_scale
+	var blurb_line_h := body_font.get_ascent(blurb_size) + body_font.get_descent(blurb_size) + 2.0 * ui_scale
+	var section_h := body_font.get_ascent(section_size) + body_font.get_descent(section_size) + 6.0 * ui_scale
+	var footer_h := (
+		56.0 if touch_ui
+		else body_font.get_ascent(hint_size) + body_font.get_descent(hint_size) + 8.0 * ui_scale
+	)
+	var panel_w := minf(500.0 * ui_scale, vp.x - 16.0)
+	var panel_h := minf(vp.y - 16.0, maxf(320.0, vp.y * 0.92))
+	var center := _board_center()
+	var panel := Rect2(center - Vector2(panel_w, panel_h) * 0.5, Vector2(panel_w, panel_h))
+	panel.position.x = clampf(panel.position.x, 8.0, maxf(8.0, vp.x - panel.size.x - 8.0))
+	panel.position.y = clampf(panel.position.y, 8.0, maxf(8.0, vp.y - panel.size.y - 8.0))
+	var close := Rect2()
+	var content_top := panel.position.y + pad_top + title_h + 12.0 * ui_scale
+	var content_bottom := panel.end.y - pad_bottom - footer_h
+	if touch_ui:
+		var button_w := minf(160.0, panel.size.x - 24.0)
+		var button_h := 44.0
+		var button_y := minf(panel.end.y - button_h - 12.0, vp.y - button_h - 12.0)
+		close = Rect2(panel.position.x + (panel.size.x - button_w) * 0.5, button_y, button_w, button_h)
+		content_bottom = close.position.y - 8.0
+	var row_w := panel.size.x - pad_x * 2.0
+	var blurb_max_w := row_w - text_pad_x * 2.0
+	var blurb_lines_by_row: Array = []
+	var row_heights: Array = []
+	var content_h := 0.0
+	for row in rows:
+		var kind := str(row.get("kind", ""))
+		if kind == "header":
+			blurb_lines_by_row.append(PackedStringArray())
+			row_heights.append(section_h)
+			content_h += section_h + row_gap
+			continue
+		var lines := _wrap_text_lines(str(row.get("blurb", "")), body_font, blurb_size, blurb_max_w)
+		blurb_lines_by_row.append(lines)
+		var row_h := (
+			row_pad_y
+			+ body_font.get_ascent(label_size)
+			+ body_font.get_descent(label_size)
+			+ 3.0 * ui_scale
+			+ blurb_line_h * float(maxi(1, lines.size()))
+			+ row_pad_y
+		)
+		if kind == "keybind":
+			row_h = maxf(row_h, 48.0 * ui_scale)
+		else:
+			row_h = maxf(row_h, 54.0 * ui_scale)
+		row_heights.append(row_h)
+		content_h += row_h + row_gap
+	var view_h := maxf(40.0, content_bottom - content_top)
+	var max_scroll := maxf(0.0, content_h - view_h)
+	_settings_scroll = clampf(_settings_scroll, 0.0, max_scroll)
+	var y := content_top - _settings_scroll
+	for i in rows.size():
+		var row_h: float = float(row_heights[i])
+		var rect := Rect2(panel.position.x + pad_x, y, row_w, row_h)
+		var visible := rect.end.y > content_top and rect.position.y < content_bottom
+		if visible:
+			var clipped := Rect2(
+				rect.position.x,
+				maxf(rect.position.y, content_top),
+				rect.size.x,
+				minf(rect.end.y, content_bottom) - maxf(rect.position.y, content_top)
+			)
+			if clipped.size.y > 8.0:
+				_option_row_rects.append(clipped)
+				_settings_row_meta.append(rows[i])
+				if str(rows[i].get("kind", "")) == "reset":
+					_settings_reset_rect = clipped
+		y += row_h + row_gap
+	return {
+		"panel": panel,
+		"pad_x": pad_x,
+		"pad_top": pad_top,
+		"pad_bottom": pad_bottom,
+		"title_size": title_size_local,
+		"section_size": section_size,
+		"label_size": label_size,
+		"blurb_size": blurb_size,
+		"blurb_line_h": blurb_line_h,
+		"row_pad_y": row_pad_y,
+		"text_pad_x": text_pad_x,
+		"footer_h": footer_h,
+		"close": close,
+		"rows": rows,
+		"row_heights": row_heights,
+		"blurb_lines_by_row": blurb_lines_by_row,
+		"content_top": content_top,
+		"content_bottom": content_bottom,
+		"max_scroll": max_scroll,
+	}
+
+
+func _draw_options(vp: Vector2) -> void:
+	draw_rect(Rect2(Vector2.ZERO, vp), Color(0, 0, 0, 0.62))
+	var layout := _layout_options(vp)
+	var panel: Rect2 = layout["panel"]
+	var pad_top: float = float(layout["pad_top"])
+	var pad_bottom: float = float(layout["pad_bottom"])
+	var title_size_local: int = int(layout["title_size"])
+	var section_size: int = int(layout["section_size"])
+	var label_size: int = int(layout["label_size"])
+	var blurb_size: int = int(layout["blurb_size"])
+	var blurb_line_h: float = float(layout["blurb_line_h"])
+	var row_pad_y: float = float(layout["row_pad_y"])
+	var text_pad_x: float = float(layout["text_pad_x"])
+	var footer_h: float = float(layout["footer_h"])
+	var close: Rect2 = layout["close"]
+	var content_top: float = float(layout["content_top"])
+	var content_bottom: float = float(layout["content_bottom"])
+	var max_scroll: float = float(layout["max_scroll"])
+	_touch_close_rect = close
+	draw_rect(panel, ColorTheme.bg_panel(0.96), true, -1.0, true)
+	draw_rect(panel, ColorTheme.accent(0.45), false, 1.5, true)
+	var title := "SETTINGS"
+	var title_w := title_font.get_string_size(title, HORIZONTAL_ALIGNMENT_LEFT, -1, title_size_local).x
+	draw_string(
+		title_font,
+		Vector2(
+			panel.position.x + (panel.size.x - title_w) * 0.5,
+			panel.position.y + pad_top + title_font.get_ascent(title_size_local)
+		),
+		title,
+		HORIZONTAL_ALIGNMENT_LEFT,
+		-1,
+		title_size_local,
+		ColorTheme.accent()
+	)
+	# Clip interactive rows to the scroll viewport.
+	for i in _option_row_rects.size():
+		var meta: Dictionary = _settings_row_meta[i]
+		var rect: Rect2 = _option_row_rects[i]
+		var kind := str(meta.get("kind", ""))
+		var id := str(meta.get("id", ""))
+		var title_label := str(meta.get("title", ""))
+		var blurb := str(meta.get("blurb", ""))
+		if kind == "header":
+			draw_string(
+				body_font,
+				Vector2(rect.position.x + text_pad_x, rect.position.y + body_font.get_ascent(section_size)),
+				title_label,
+				HORIZONTAL_ALIGNMENT_LEFT,
+				-1,
+				section_size,
+				ColorTheme.accent(0.85)
+			)
+			continue
+		var listening := kind == "keybind" and id == _rebind_action_id
+		var fill := ColorTheme.bg_elevated(0.96)
+		var border := ColorTheme.accent(0.85) if listening else ColorTheme.accent(0.55)
+		draw_rect(rect, fill, true, -1.0, true)
+		draw_rect(rect, border, false, 2.0 if listening else 1.5, true)
+		var value := ""
+		if kind == "toggle":
+			value = _option_value_label(id)
+		elif kind == "keybind":
+			value = "Press a key..." if listening else Keybinds.keys_label(id)
+		var head := title_label if kind == "reset" else "%s  ·  %s" % [title_label, value]
+		var head_y := rect.position.y + row_pad_y + body_font.get_ascent(label_size)
+		if head_y < content_bottom and head_y > content_top:
+			draw_string(
+				body_font,
+				Vector2(rect.position.x + text_pad_x, head_y),
+				head,
+				HORIZONTAL_ALIGNMENT_LEFT,
+				-1,
+				label_size,
+				ColorTheme.gold() if listening else ColorTheme.text()
+			)
+		var blurb_lines := _wrap_text_lines(
+			blurb,
+			body_font,
+			blurb_size,
+			rect.size.x - text_pad_x * 2.0
+		)
+		var blurb_y := (
+			head_y
+			+ body_font.get_descent(label_size)
+			+ 3.0 * ui_scale
+			+ body_font.get_ascent(blurb_size)
+		)
+		for line_i in blurb_lines.size():
+			var ly := blurb_y + float(line_i) * blurb_line_h
+			if ly < content_top or ly > content_bottom:
+				continue
+			draw_string(
+				body_font,
+				Vector2(rect.position.x + text_pad_x, ly),
+				str(blurb_lines[line_i]),
+				HORIZONTAL_ALIGNMENT_LEFT,
+				-1,
+				blurb_size,
+				ColorTheme.muted()
+			)
+	if max_scroll > 0.0:
+		var track := Rect2(panel.end.x - 6.0, content_top, 3.0, content_bottom - content_top)
+		draw_rect(track, ColorTheme.bg_deep(0.7), true, -1.0, true)
+		var thumb_h := maxf(18.0, track.size.y * (track.size.y / (track.size.y + max_scroll)))
+		var thumb_y := track.position.y + (track.size.y - thumb_h) * (_settings_scroll / max_scroll)
+		draw_rect(Rect2(track.position.x, thumb_y, track.size.x, thumb_h), ColorTheme.accent(0.7), true, -1.0, true)
+	if close.size.x > 0.0:
+		_draw_overlay_button(close, "CLOSE")
+	elif footer_h > 0.0:
+		var footer := (
+			"Press a key to bind  Backspace clear  Esc cancel"
+			if not _rebind_action_id.is_empty()
+			else (
+				"Scroll for more  Esc back"
+				if PlayDevice.is_touch_primary()
+				else "Click remap  Right-click clear  Scroll  Esc back"
+			)
+		)
+		var footer_w := body_font.get_string_size(footer, HORIZONTAL_ALIGNMENT_LEFT, -1, hint_size).x
+		var footer_y := panel.end.y - pad_bottom + body_font.get_ascent(hint_size) - footer_h + 4.0 * ui_scale
+		draw_string(
+			body_font,
+			Vector2(panel.position.x + (panel.size.x - footer_w) * 0.5, footer_y),
+			footer,
+			HORIZONTAL_ALIGNMENT_LEFT,
+			-1,
+			hint_size,
+			ColorTheme.muted()
+		)
+
+
+func _clear_keybind_at(point: Vector2) -> bool:
+	_layout_options(get_viewport_rect().size)
+	for i in _option_row_rects.size():
+		var rect: Rect2 = _option_row_rects[i]
+		if not rect.has_point(point):
+			continue
+		var meta: Dictionary = _settings_row_meta[i]
+		if str(meta.get("kind", "")) != "keybind":
+			return false
+		var id := str(meta.get("id", ""))
+		Keybinds.clear_bind(id)
+		_rebind_action_id = ""
+		if music != null and music.has_method("show_status"):
+			music.show_status("Unbound %s" % str(meta.get("title", id)))
+		queue_redraw()
+		return true
+	return false
+
+
+func _handle_options_pointer(point: Vector2) -> bool:
+	if not options_open:
+		return false
+	_layout_options(get_viewport_rect().size)
+	if _touch_close_rect.size.x > 0.0 and _touch_close_rect.has_point(point):
+		_rebind_action_id = ""
+		_return_from_overlay_to_mode_select()
+		if touch != null:
+			touch.suppress_play_taps()
+		return true
+	for i in _option_row_rects.size():
+		var rect: Rect2 = _option_row_rects[i]
+		if not rect.has_point(point):
+			continue
+		var meta: Dictionary = _settings_row_meta[i]
+		var kind := str(meta.get("kind", ""))
+		var id := str(meta.get("id", ""))
+		if kind == "toggle":
+			_rebind_action_id = ""
+			_activate_option(id)
+			return true
+		if kind == "keybind":
+			_rebind_action_id = "" if _rebind_action_id == id else id
+			queue_redraw()
+			return true
+		if kind == "reset":
+			_reset_all_settings()
+			return true
+	_rebind_action_id = ""
+	queue_redraw()
+	return true
+
+
+func _handle_options_keys(event: InputEvent) -> bool:
+	if not options_open:
+		return false
+	if event is InputEventMouseButton and event.pressed:
+		var mouse := event as InputEventMouseButton
+		if mouse.button_index == MOUSE_BUTTON_WHEEL_UP:
+			_settings_scroll = maxf(0.0, _settings_scroll - 36.0 * ui_scale)
+			queue_redraw()
+			return true
+		if mouse.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			_settings_scroll += 36.0 * ui_scale
+			queue_redraw()
+			return true
+		if (
+			not PlayDevice.is_touch_primary()
+			and mouse.button_index == MOUSE_BUTTON_RIGHT
+		):
+			if _clear_keybind_at(mouse.position):
+				return true
+	if not (event is InputEventKey):
+		return false
+	var key := event as InputEventKey
+	if not key.pressed or key.echo:
+		return false
+	if not _rebind_action_id.is_empty():
+		if key.keycode == KEY_ESCAPE or key.physical_keycode == KEY_ESCAPE:
+			if _rebind_action_id == Keybinds.PAUSE_MENU:
+				Keybinds.bind_key(_rebind_action_id, KEY_ESCAPE)
+			_rebind_action_id = ""
+			queue_redraw()
+			return true
+		if (
+			key.keycode == KEY_BACKSPACE
+			or key.physical_keycode == KEY_BACKSPACE
+			or key.keycode == KEY_DELETE
+			or key.physical_keycode == KEY_DELETE
+		):
+			Keybinds.clear_bind(_rebind_action_id)
+			_rebind_action_id = ""
+			queue_redraw()
+			return true
+		var code := Keybinds.event_keycode(key)
+		if code != KEY_NONE:
+			Keybinds.bind_key(_rebind_action_id, code)
+			_rebind_action_id = ""
+			queue_redraw()
+		return true
+	if _key_pressed(event, KEY_ESCAPE) or event.is_action_pressed("ui_cancel"):
+		_return_from_overlay_to_mode_select()
+		return true
+	if _key_pressed(event, KEY_O):
+		_return_from_overlay_to_mode_select()
+		return true
+	return false
+
+
 func _draw_overlays(vp: Vector2) -> void:
 	_sync_touch_overlay_rects()
 	if score_open:
@@ -2753,6 +3317,9 @@ func _draw_overlays(vp: Vector2) -> void:
 		return
 	if help_open:
 		_draw_info_table(vp, "CONTROLS", _help_rows(), "Space / Enter / Esc back to mode menu")
+		return
+	if options_open:
+		_draw_options(vp)
 		return
 	if mode_select_open:
 		_draw_mode_select(vp)

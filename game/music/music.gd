@@ -2,6 +2,8 @@ extends Node2D
 const ColorTheme = preload("res://game/theme/color_theme.gd")
 
 ## Playlist, mute, and volume for the in-game soundtrack.
+
+const Keybinds = preload("res://game/options/keybinds.gd")
 ## Track order is shuffled from the current time, then shuffled again after each full pass.
 ## Streams load in the background. On web (Sample playback), each track is also registered
 ## as an AudioServer sample before play so decode hitch is not on the gameplay skip path.
@@ -61,33 +63,34 @@ func _ready() -> void:
 
 
 func handle_input(event: InputEvent) -> bool:
-	var key := event as InputEventKey
-	if _is_key(event, KEY_M):
-		if not key.echo:
-			_toggle_mute()
+	if Keybinds.matches_pressed(event, Keybinds.MUTE):
+		_toggle_mute()
 		return true
-	if _is_key(event, KEY_N):
-		if not key.echo:
-			_skip()
+	if Keybinds.matches_pressed(event, Keybinds.NEXT_TRACK):
+		_skip()
 		return true
-	if _is_key(event, KEY_PAGEUP):
+	if Keybinds.matches_pressed(event, Keybinds.VOL_UP):
 		_change_volume(1)
 		return true
-	if _is_key(event, KEY_PAGEDOWN):
+	if Keybinds.matches_pressed(event, Keybinds.VOL_DOWN):
 		_change_volume(-1)
 		return true
 	return false
 
 
-func _is_key(event: InputEvent, code: Key) -> bool:
-	if not (event is InputEventKey and event.pressed):
-		return false
-	var key := event as InputEventKey
-	return key.keycode == code or key.physical_keycode == code
+func is_muted() -> bool:
+	return _muted
 
 
 func toggle_mute() -> void:
 	_toggle_mute()
+
+
+func reset_audio_prefs() -> void:
+	_muted = false
+	_volume_step = DEFAULT_STEP
+	_apply_volume()
+	_save_volume_prefs()
 
 
 func skip_track() -> void:

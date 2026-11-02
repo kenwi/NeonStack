@@ -199,6 +199,13 @@ static func cycle() -> String:
 	return label()
 
 
+static func reset_to_default() -> String:
+	ensure_loaded()
+	_id = Id.CYAN
+	_save()
+	return label()
+
+
 static func _save() -> void:
 	var cfg := ConfigFile.new()
 	cfg.load(CONFIG_PATH)
