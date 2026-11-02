@@ -18,7 +18,7 @@ static func entries(touch_primary: bool) -> Array:
 		{
 			"id": ID_JUICE,
 			"title": "Juice FX",
-			"blurb": "Screen shake, particles, and score popups. Tip: Set OFF on low powered devices.",
+			"blurb": "Screen flashing, particles, and score popups. Tip: Set OFF on low powered devices.",
 		},
 		{
 			"id": ID_THEME,

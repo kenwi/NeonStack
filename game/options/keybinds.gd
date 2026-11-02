@@ -74,7 +74,7 @@ const META := {
 	HELP: {"title": "Help", "blurb": "Toggle the controls overlay."},
 	SCORE_TABLE: {"title": "Score table", "blurb": "Show how points are awarded."},
 	FULLSCREEN: {"title": "Fullscreen", "blurb": "Toggle fullscreen mode."},
-	JUICE: {"title": "Juice FX", "blurb": "Toggle particles and screen shake."},
+	JUICE: {"title": "Juice FX", "blurb": "Toggle particles and screen flashing."},
 	BACKDROP: {"title": "Background", "blurb": "Cycle dim lines, bright lines, or horizon."},
 	THEME: {"title": "Color theme", "blurb": "Cycle the UI color palette."},
 	GREETINGS: {"title": "Rank greetings", "blurb": "Toggle leaderboard climb announcements."},
