@@ -1291,76 +1291,143 @@ func _handle_hard_drop_hint_input(event: InputEvent) -> bool:
 	return true
 
 
-func _layout_hard_drop_hint(vp: Vector2) -> void:
-	var panel_w := minf(520.0 * ui_scale, vp.x - 24.0)
-	var panel_h := minf(340.0 * ui_scale, vp.y - 24.0)
+func _compact_keys_label(action_id: String) -> String:
+	## Tip copy: drop redundant Keypad Enter when Enter is already listed.
+	var label := Keybinds.keys_label(action_id)
+	label = label.replace(" / Keypad Enter", "").replace("Keypad Enter / ", "")
+	if label == "Keypad Enter":
+		label = "Enter"
+	return label
+
+
+func _hard_drop_hint_paragraphs() -> PackedStringArray:
+	if PlayDevice.is_touch_primary():
+		return PackedStringArray([
+			"Soft drop (hold the down control) lowers the piece faster for 1 point per cell.",
+			"Hard drop (DROP) locks instantly for 2 points per cell - twice the score.",
+			"Use hard drop when you know the landing spot.",
+		])
+	var soft_bind := _compact_keys_label(Keybinds.SOFT_DROP)
+	var hard_bind := _compact_keys_label(Keybinds.HARD_DROP)
+	return PackedStringArray([
+		"Soft drop (%s) lowers the piece faster for 1 point per cell." % soft_bind,
+		"Hard drop (%s) locks instantly for 2 points per cell - twice the score." % hard_bind,
+		"Use hard drop when you know the landing spot.",
+	])
+
+
+func _hard_drop_hint_metrics(vp: Vector2) -> Dictionary:
+	var panel_w := minf(480.0 * ui_scale, vp.x - 24.0)
+	var pad_x := 28.0 * ui_scale
+	var pad_top := 28.0 * ui_scale
+	var pad_bottom := 20.0 * ui_scale
+	var title_size_local := maxi(20, int(round(26 * ui_scale)))
+	var body_size := maxi(13, int(round(15 * ui_scale)))
+	var note_size := maxi(12, body_size - 1)
+	var btn_h := maxf(44.0, 48.0 * ui_scale)
+	var max_w := panel_w - pad_x * 2.0
+	var line_h := (
+		body_font.get_ascent(body_size) + body_font.get_descent(body_size) + 5.0 * ui_scale
+	)
+	var note_line_h := (
+		body_font.get_ascent(note_size) + body_font.get_descent(note_size) + 4.0 * ui_scale
+	)
+	var lines: PackedStringArray = PackedStringArray()
+	var paragraphs := _hard_drop_hint_paragraphs()
+	for i in paragraphs.size():
+		if i > 0:
+			lines.append("")
+		lines.append_array(_wrap_text_lines(str(paragraphs[i]), body_font, body_size, max_w))
+	var note_lines := _wrap_text_lines("This tip is only shown once.", body_font, note_size, max_w)
+	var title_h := title_font.get_ascent(title_size_local) + title_font.get_descent(title_size_local)
+	var body_block_h := line_h * float(maxi(1, lines.size()))
+	var note_block_h := note_line_h * float(maxi(1, note_lines.size()))
+	var panel_h := (
+		pad_top
+		+ title_h
+		+ 18.0 * ui_scale
+		+ body_block_h
+		+ 14.0 * ui_scale
+		+ note_block_h
+		+ 16.0 * ui_scale
+		+ btn_h
+		+ pad_bottom
+	)
+	panel_h = minf(panel_h, vp.y - 16.0)
 	var center := _board_center()
 	var panel := Rect2(center - Vector2(panel_w, panel_h) * 0.5, Vector2(panel_w, panel_h))
-	var btn_w := minf(220.0 * ui_scale, panel.size.x - 48.0 * ui_scale)
-	var btn_h := maxf(44.0, 48.0 * ui_scale)
-	_hard_drop_hint_resume_rect = Rect2(
+	panel.position.y = clampf(panel.position.y, 8.0, maxf(8.0, vp.y - panel.size.y - 8.0))
+	var btn_w := minf(220.0 * ui_scale, panel.size.x - pad_x * 2.0)
+	var resume := Rect2(
 		panel.get_center().x - btn_w * 0.5,
-		panel.end.y - 24.0 * ui_scale - btn_h,
+		panel.end.y - pad_bottom - btn_h,
 		btn_w,
 		btn_h
 	)
+	return {
+		"panel": panel,
+		"resume": resume,
+		"pad_x": pad_x,
+		"pad_top": pad_top,
+		"title_size": title_size_local,
+		"body_size": body_size,
+		"note_size": note_size,
+		"line_h": line_h,
+		"note_line_h": note_line_h,
+		"lines": lines,
+		"note_lines": note_lines,
+		"title_h": title_h,
+	}
+
+
+func _layout_hard_drop_hint(vp: Vector2) -> void:
+	var metrics := _hard_drop_hint_metrics(vp)
+	_hard_drop_hint_resume_rect = metrics["resume"]
 
 
 func _draw_hard_drop_hint(vp: Vector2) -> void:
-	_layout_hard_drop_hint(vp)
-	var center := _board_center()
+	var metrics := _hard_drop_hint_metrics(vp)
+	_hard_drop_hint_resume_rect = metrics["resume"]
+	var panel: Rect2 = metrics["panel"]
+	var pad_top: float = float(metrics["pad_top"])
+	var title_size_local: int = int(metrics["title_size"])
+	var body_size: int = int(metrics["body_size"])
+	var note_size: int = int(metrics["note_size"])
+	var line_h: float = float(metrics["line_h"])
+	var note_line_h: float = float(metrics["note_line_h"])
+	var lines: PackedStringArray = metrics["lines"]
+	var note_lines: PackedStringArray = metrics["note_lines"]
+	var title_h: float = float(metrics["title_h"])
 	draw_rect(Rect2(Vector2.ZERO, vp), Color(0, 0, 0, 0.62))
-	var panel_w := minf(520.0 * ui_scale, vp.x - 24.0)
-	var panel_h := minf(340.0 * ui_scale, vp.y - 24.0)
-	var panel := Rect2(center - Vector2(panel_w, panel_h) * 0.5, Vector2(panel_w, panel_h))
 	draw_rect(panel, ColorTheme.bg_panel(0.96), true, -1.0, true)
 	draw_rect(panel, ColorTheme.accent(0.55), false, 1.5, true)
-	var title_size_local := maxi(20, int(round(28 * ui_scale)))
-	var body_size := maxi(13, int(round(16 * ui_scale)))
 	var mid := panel.get_center()
+	var title_y := panel.position.y + pad_top + title_font.get_ascent(title_size_local)
 	_draw_centered_label(
 		mid,
 		"HARD DROP HINT",
 		title_font,
 		title_size_local,
 		ColorTheme.accent(),
-		panel.position.y + 32.0 * ui_scale - mid.y
+		title_y - mid.y
 	)
-	var soft_bind := Keybinds.keys_label(Keybinds.SOFT_DROP)
-	var hard_bind := Keybinds.keys_label(Keybinds.HARD_DROP)
-	var lines: PackedStringArray = PackedStringArray()
-	if PlayDevice.is_touch_primary():
-		lines = PackedStringArray([
-			"Soft drop (hold the down control) lowers the",
-			"piece faster for 1 point per cell.",
-			"Hard drop (DROP) locks instantly for 2 points",
-			"per cell - twice the score.",
-			"Use hard drop when you know the landing spot.",
-			"This tip is only shown once.",
-		])
-	else:
-		lines = PackedStringArray([
-			"Soft drop (%s) lowers the piece faster" % soft_bind,
-			"for 1 point per cell.",
-			"Hard drop (%s) locks instantly for 2 points" % hard_bind,
-			"per cell - twice the score.",
-			"Use hard drop when you know the landing spot.",
-			"This tip is only shown once.",
-		])
-	var line_h := (
-		body_font.get_ascent(body_size) + body_font.get_descent(body_size) + 7.0 * ui_scale
-	)
-	var text_y := panel.position.y + 72.0 * ui_scale
+	var y := panel.position.y + pad_top + title_h + 18.0 * ui_scale + body_font.get_ascent(body_size)
 	for i in lines.size():
-		var color := ColorTheme.muted() if i == lines.size() - 1 else ColorTheme.text()
+		var line := str(lines[i])
+		if not line.is_empty():
+			_draw_centered_label(mid, line, body_font, body_size, ColorTheme.text(), y - mid.y)
+		y += line_h
+	y += 14.0 * ui_scale - body_font.get_ascent(body_size) + body_font.get_ascent(note_size)
+	for i in note_lines.size():
 		_draw_centered_label(
 			mid,
-			str(lines[i]),
+			str(note_lines[i]),
 			body_font,
-			body_size,
-			color,
-			text_y + float(i) * line_h - mid.y
+			note_size,
+			ColorTheme.muted(),
+			y - mid.y
 		)
+		y += note_line_h
 	_draw_overlay_button(_hard_drop_hint_resume_rect, "RESUME")
 
 
