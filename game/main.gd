@@ -518,8 +518,8 @@ func _challenge_friends_unlocked() -> bool:
 	## Soft launch gate: only m0b sees create UI until challenges ship broadly.
 	if highscores == null:
 		return false
-	var name := str(highscores.player_name).strip_edges()
-	return not name.is_empty() and name.to_lower() == "m0b"
+	var player := str(highscores.player_name).strip_edges()
+	return not player.is_empty() and player.to_lower() == "m0b"
 
 
 func _on_challenge_activated(data: Dictionary) -> void:
