@@ -539,21 +539,20 @@ func _handle_editor_debug_keys(event: InputEvent) -> bool:
 	if not (event is InputEventKey and event.pressed and not event.echo):
 		return false
 	if _key_pressed(event, KEY_F1):
-		_editor_debug_lines = _build_editor_debug_dump()
+		if _editor_debug_lines.is_empty():
+			_editor_debug_lines = _build_editor_debug_dump()
+		else:
+			_editor_debug_lines = PackedStringArray()
 		queue_redraw()
 		return true
 	if _key_pressed(event, KEY_F2):
 		_editor_clear_player_data()
 		_editor_debug_lines = PackedStringArray([
-			"EDITOR DEBUG — player data cleared",
+			"DEBUG — player data cleared",
 			"highscore.cfg + challenge.cfg removed",
 			"runtime player name/id + active challenge reset",
-			"F1 dump again · F2 clear again",
+			"F1 toggle dump · F2 clear again",
 		])
-		queue_redraw()
-		return true
-	if _key_pressed(event, KEY_ESCAPE) and not _editor_debug_lines.is_empty():
-		_editor_debug_lines = PackedStringArray()
 		queue_redraw()
 		return true
 	return false
@@ -561,7 +560,7 @@ func _handle_editor_debug_keys(event: InputEvent) -> bool:
 
 func _build_editor_debug_dump() -> PackedStringArray:
 	var lines: PackedStringArray = PackedStringArray()
-	lines.append("EDITOR DEBUG (F1 dump · F2 clear player · Esc hide)")
+	lines.append("DEBUG (F1 toggle · F2 clear player)")
 	lines.append("user_data: %s" % OS.get_user_data_dir())
 	lines.append("api: %s" % HighscoreConfig.API_BASE_URL)
 	lines.append(
@@ -2244,7 +2243,7 @@ func _handle_mode_select_keys(event: InputEvent) -> bool:
 
 
 func _input(event: InputEvent) -> void:
-	if OS.has_feature("editor") and _handle_editor_debug_keys(event):
+	if _challenge_friends_unlocked() and _handle_editor_debug_keys(event):
 		get_viewport().set_input_as_handled()
 		return
 	# Name entry / submit owns the keyboard so game and music binds do not fire.
