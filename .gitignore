@@ -13,6 +13,8 @@ addons/
 server/data/highscores.json
 server/data/highscores-e2e.json
 server/data/logs/
+server/data/replays/*.json
+server/scripts/__pycache__/
 server/.env
 server/bin/
 server/obj/

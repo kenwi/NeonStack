@@ -1,0 +1,844 @@
+#!/usr/bin/env python3
+"""Player statistics from the Neon Stack highscores file.
+
+Examples:
+  highscore-stats
+  highscore-stats m0b
+  highscore-stats -n 50
+  highscore-stats Dyret -n 10
+  highscore-stats --mode classic-mobile
+  highscore-stats m0b --plot
+  highscore-stats m0b --plot --smooth
+  highscore-stats STRENGERESTRAFF --plot --theme dark --save ~/strenger.png
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+
+DEFAULT_PATH = Path(
+    "/home/kenwi/Work/tetris/server/data/highscores.json"
+)
+
+
+@dataclass
+class Game:
+    name: str
+    mode: str
+    score: int
+    lines: int
+    level: int
+    elapsed: float
+    submitted: datetime | None
+    has_replay: bool
+
+
+@dataclass
+class PlayerStats:
+    name: str
+    runs: int = 0
+    top_score: int = 0
+    total_score: int = 0
+    total_elapsed: float = 0.0
+    total_lines: int = 0
+    max_level: int = 0
+    replays: int = 0
+    modes: dict[str, int] = field(default_factory=dict)
+    first_at: datetime | None = None
+    last_at: datetime | None = None
+    top_game: Game | None = None
+
+    @property
+    def avg_score(self) -> float:
+        return self.total_score / self.runs if self.runs else 0.0
+
+    @property
+    def avg_elapsed(self) -> float:
+        return self.total_elapsed / self.runs if self.runs else 0.0
+
+    @property
+    def avg_lines(self) -> float:
+        return self.total_lines / self.runs if self.runs else 0.0
+
+
+def parse_submitted(raw) -> datetime | None:
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+    # Support +01:00 and trailing Z.
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def load_games(path: Path, mode_filter: str | None) -> list[Game]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    modes = data.get("Modes") or data.get("modes") or {}
+    games: list[Game] = []
+    for mode, entries in modes.items():
+        if mode_filter and mode != mode_filter:
+            continue
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            games.append(
+                Game(
+                    name=str(entry.get("PlayerName") or entry.get("playerName") or "Anonymous"),
+                    mode=str(mode),
+                    score=int(entry.get("FinalScore") or entry.get("finalScore") or 0),
+                    lines=int(entry.get("LinesCleared") or entry.get("linesCleared") or 0),
+                    level=int(entry.get("Level") or entry.get("level") or 1),
+                    elapsed=float(entry.get("ElapsedSeconds") or entry.get("elapsedSeconds") or 0.0),
+                    submitted=parse_submitted(entry.get("SubmittedAt") or entry.get("submittedAt")),
+                    has_replay=bool(entry.get("HasReplay") or entry.get("hasReplay") or False),
+                )
+            )
+    return games
+
+
+def filter_games(games: list[Game], name: str | None, last_n: int | None) -> list[Game]:
+    selected = games
+    if name:
+        needle = name.casefold()
+        selected = [g for g in selected if g.name.casefold() == needle]
+    # Newest first for -n window. Missing timestamps sort last.
+    selected.sort(
+        key=lambda g: g.submitted or datetime.min,
+        reverse=True,
+    )
+    if last_n is not None:
+        selected = selected[: max(0, last_n)]
+    return selected
+
+
+def aggregate(games: list[Game]) -> list[PlayerStats]:
+    by_name: dict[str, PlayerStats] = {}
+    for game in games:
+        stats = by_name.get(game.name)
+        if stats is None:
+            stats = PlayerStats(name=game.name)
+            by_name[game.name] = stats
+        stats.runs += 1
+        stats.total_score += game.score
+        stats.total_elapsed += max(0.0, game.elapsed)
+        stats.total_lines += max(0, game.lines)
+        stats.max_level = max(stats.max_level, game.level)
+        if game.has_replay:
+            stats.replays += 1
+        stats.modes[game.mode] = stats.modes.get(game.mode, 0) + 1
+        if game.score > stats.top_score:
+            stats.top_score = game.score
+            stats.top_game = game
+        if game.submitted is not None:
+            if stats.first_at is None or game.submitted < stats.first_at:
+                stats.first_at = game.submitted
+            if stats.last_at is None or game.submitted > stats.last_at:
+                stats.last_at = game.submitted
+    return sorted(by_name.values(), key=lambda s: (-s.top_score, -s.runs, s.name.casefold()))
+
+
+def fmt_duration(seconds: float) -> str:
+    total = int(round(max(0.0, seconds)))
+    hours, rem = divmod(total, 3600)
+    minutes, secs = divmod(rem, 60)
+    if hours:
+        return f"{hours}h {minutes:02d}m {secs:02d}s"
+    if minutes:
+        return f"{minutes}m {secs:02d}s"
+    return f"{secs}s"
+
+
+def fmt_score(value: float | int) -> str:
+    return f"{int(round(value)):,}".replace(",", " ")
+
+
+def fmt_dt(value: datetime | None) -> str:
+    if value is None:
+        return "-"
+    # Prefer local-looking wall time without tz clutter.
+    return value.strftime("%Y-%m-%d %H:%M")
+
+
+def print_stats(players: list[PlayerStats], games_used: int, name: str | None, last_n: int | None, mode: str | None) -> None:
+    scope = []
+    if name:
+        scope.append(f"player={name}")
+    if mode:
+        scope.append(f"mode={mode}")
+    else:
+        scope.append("mode=all")
+    if last_n is not None:
+        scope.append(f"last={last_n} games")
+    print(f"Highscore stats  ({', '.join(scope)})")
+    print(f"Games in sample: {games_used}   Players: {len(players)}")
+    print()
+
+    if not players:
+        print("No matching games.")
+        return
+
+    # Wide summary table.
+    headers = [
+        "Player",
+        "Runs",
+        "Top",
+        "Avg",
+        "Total time",
+        "Avg time",
+        "Lines",
+        "Max Lv",
+        "Replays",
+        "Modes",
+        "First",
+        "Last",
+    ]
+    rows: list[list[str]] = []
+    for p in players:
+        mode_bits = ", ".join(f"{m}:{c}" for m, c in sorted(p.modes.items()))
+        rows.append(
+            [
+                p.name,
+                str(p.runs),
+                fmt_score(p.top_score),
+                fmt_score(p.avg_score),
+                fmt_duration(p.total_elapsed),
+                fmt_duration(p.avg_elapsed),
+                fmt_score(p.total_lines),
+                str(p.max_level),
+                str(p.replays),
+                mode_bits,
+                fmt_dt(p.first_at),
+                fmt_dt(p.last_at),
+            ]
+        )
+
+    widths = [len(h) for h in headers]
+    for row in rows:
+        for i, cell in enumerate(row):
+            widths[i] = max(widths[i], len(cell))
+
+    def fmt_row(cols: list[str]) -> str:
+        parts = []
+        for i, cell in enumerate(cols):
+            # Right-align numeric-ish columns.
+            if i in (1, 2, 3, 6, 7, 8):
+                parts.append(cell.rjust(widths[i]))
+            else:
+                parts.append(cell.ljust(widths[i]))
+        return "  ".join(parts)
+
+    print(fmt_row(headers))
+    print("  ".join("-" * w for w in widths))
+    for row in rows:
+        print(fmt_row(row))
+
+    # Detail block when focusing on one player (or few players).
+    if name or len(players) == 1:
+        print()
+        for p in players:
+            top = p.top_game
+            print(f"Detail: {p.name}")
+            print(f"  Runs:          {p.runs}")
+            print(f"  Top score:     {fmt_score(p.top_score)}")
+            if top:
+                print(
+                    f"  Top run:       {top.mode}  lines={top.lines}  "
+                    f"level={top.level}  time={fmt_duration(top.elapsed)}  "
+                    f"at={fmt_dt(top.submitted)}  replay={'yes' if top.has_replay else 'no'}"
+                )
+            print(f"  Average score: {fmt_score(p.avg_score)}")
+            print(f"  Total time:    {fmt_duration(p.total_elapsed)}")
+            print(f"  Average time:  {fmt_duration(p.avg_elapsed)}")
+            print(f"  Total lines:   {fmt_score(p.total_lines)}  (avg {p.avg_lines:.1f})")
+            print(f"  Max level:     {p.max_level}")
+            print(f"  With replay:   {p.replays}/{p.runs}")
+            print(f"  Modes:         {', '.join(f'{m} {c}' for m, c in sorted(p.modes.items()))}")
+            print(f"  First / last:  {fmt_dt(p.first_at)}  →  {fmt_dt(p.last_at)}")
+
+
+def rolling_average(values: list[int], window: int) -> list[float | None]:
+    """Trailing rolling mean; None until the window is full."""
+    if window <= 0:
+        raise ValueError("rolling window must be >= 1")
+    out: list[float | None] = []
+    running = 0
+    for i, value in enumerate(values):
+        running += value
+        if i + 1 < window:
+            out.append(None)
+            continue
+        if i + 1 > window:
+            running -= values[i - window]
+        out.append(running / float(window))
+    return out
+
+
+# Distinct hues for board modes (and any future mode ids). Overlay series use
+# reserved keys so they stay readable against the mode palette.
+SERIES_PALETTE_LIGHT = [
+    "#3aa0ff",  # blue
+    "#ff7a3a",  # orange
+    "#2bb673",  # green
+    "#e4572e",  # vermillion
+    "#9b59b6",  # purple
+    "#17a2b8",  # cyan
+    "#e91e63",  # pink
+    "#8d6e63",  # brown
+    "#00bfa5",  # teal
+    "#f4a261",  # sand
+    "#5c6bc0",  # indigo
+    "#d4a017",  # gold-olive
+]
+SERIES_PALETTE_DARK = [
+    "#5eb1ff",
+    "#ff9a5c",
+    "#5bd68a",
+    "#ff6b4a",
+    "#c792ea",
+    "#4dd0e1",
+    "#ff80ab",
+    "#bcaaa4",
+    "#64ffda",
+    "#ffcc80",
+    "#9fa8da",
+    "#ffd54f",
+]
+# Preferred colors for well-known boards (still drawn from the palette range).
+MODE_COLOR_INDEX = {
+    "classic": 0,
+    "classic-mobile": 1,
+    "hardcore": 2,
+    "hardcore-mobile": 3,
+    "daily": 4,
+    "daily-mobile": 5,
+    "weekly": 6,
+    "weekly-mobile": 7,
+    "hardcore-daily": 8,
+    "hardcore-daily-mobile": 9,
+    "hardcore-weekly": 10,
+    "hardcore-weekly-mobile": 11,
+}
+MODE_MARKERS = ["o", "s", "D", "^", "v", "P", "X", "*", "h", "8"]
+
+
+def is_hardcore_mode(mode: str) -> bool:
+    return mode == "hardcore" or mode.startswith("hardcore-")
+
+
+def plot_mode_key(mode: str) -> str:
+    """Collapse period boards so all daily/weekly runs share one series each.
+
+    Examples:
+      daily-2026-11-01          -> daily
+      daily-2026-11-01-mobile   -> daily-mobile
+      hardcore-weekly-2026-W44  -> hardcore-weekly
+      classic / hardcore        -> unchanged
+    """
+    mobile = mode.endswith("-mobile")
+    core = mode[: -len("-mobile")] if mobile else mode
+    suffix = "-mobile" if mobile else ""
+
+    hardcore = False
+    if core == "hardcore":
+        return "hardcore" + suffix
+    if core.startswith("hardcore-"):
+        hardcore = True
+        core = core[len("hardcore-") :]
+
+    if core == "classic":
+        return ("hardcore-" if hardcore else "") + "classic" + suffix
+    if core == "daily" or core.startswith("daily-"):
+        return ("hardcore-" if hardcore else "") + "daily" + suffix
+    if core == "weekly" or core.startswith("weekly-"):
+        return ("hardcore-" if hardcore else "") + "weekly" + suffix
+    return mode
+
+
+def sort_games_for_series(games: list[Game]) -> list[Game]:
+    """Sort by submitted time; undated games keep relative order at the end."""
+    dated = [g for g in games if g.submitted is not None]
+    undated = [g for g in games if g.submitted is None]
+    dated.sort(key=lambda g: g.submitted or datetime.min)
+    return dated + undated
+
+
+def running_personal_best(games: list[Game]) -> tuple[list, list[int]]:
+    """Chronological running max; returns (x timestamps, best scores)."""
+    xs = []
+    best: list[int] = []
+    cur = 0
+    for game in games:
+        cur = max(cur, game.score)
+        xs.append(game.submitted)
+        best.append(cur)
+    return xs, best
+
+
+def plot_rolling_average(
+    ax,
+    games: list[Game],
+    window: int,
+    color: str,
+    label: str,
+) -> None:
+    """Plot a trailing rolling average for a chronological game list."""
+    if not games:
+        return
+    xs_all = [g.submitted for g in games]
+    scores = [g.score for g in games]
+    win = max(1, min(window, len(scores)))
+    roll = rolling_average(scores, win)
+    roll_xs = [x for x, y in zip(xs_all, roll) if y is not None]
+    roll_ys = [y for y in roll if y is not None]
+    if not roll_xs:
+        return
+    ax.plot(
+        roll_xs,
+        roll_ys,
+        color=color,
+        linewidth=2.0,
+        linestyle="-",
+        label=f"{label} ({win})",
+    )
+
+
+def apply_plot_theme(fig, ax, theme: str) -> dict[str, object]:
+    """Style figure/axes and return series colors / palette for the theme."""
+    if theme == "dark":
+        bg = "#12141a"
+        panel = "#1a1d26"
+        text = "#e8eaed"
+        grid = "#3c4048"
+        colors: dict[str, object] = {
+            "best": "#e6c35c",
+            "best_hardcore": "#ff6b8a",
+            "roll": "#b388ff",
+            # Magenta - kept off the mode palette (avoids clashing with hardcore green).
+            "roll_hardcore": "#e040fb",
+            "fallback": "#9aa0a6",
+            "palette": SERIES_PALETTE_DARK,
+        }
+    else:
+        bg = "#ffffff"
+        panel = "#ffffff"
+        text = "#202124"
+        grid = "#dadce0"
+        colors = {
+            "best": "#c9a227",
+            "best_hardcore": "#d62828",
+            "roll": "#7c4dff",
+            "roll_hardcore": "#aa00ff",
+            "fallback": "#9aa0a6",
+            "palette": SERIES_PALETTE_LIGHT,
+        }
+
+    fig.patch.set_facecolor(bg)
+    ax.set_facecolor(panel)
+    ax.tick_params(colors=text)
+    ax.xaxis.label.set_color(text)
+    ax.yaxis.label.set_color(text)
+    ax.title.set_color(text)
+    for spine in ax.spines.values():
+        spine.set_color(grid)
+    ax.grid(True, alpha=0.35, color=grid)
+    return colors
+
+
+def mode_series_style(
+    mode: str,
+    palette: list[str],
+    used_indexes: set[int],
+) -> dict[str, str]:
+    """Pick a distinct color + marker for a mode id."""
+    if mode in MODE_COLOR_INDEX:
+        idx = MODE_COLOR_INDEX[mode] % len(palette)
+    else:
+        # Stable hash into the palette, then walk forward to avoid collisions.
+        idx = sum(ord(ch) for ch in mode) % len(palette)
+        if idx in used_indexes and len(used_indexes) < len(palette):
+            start = idx
+            while idx in used_indexes:
+                idx = (idx + 1) % len(palette)
+                if idx == start:
+                    break
+    used_indexes.add(idx)
+    marker = MODE_MARKERS[idx % len(MODE_MARKERS)]
+    return {"color": palette[idx], "marker": marker, "label": mode}
+
+
+def smooth_curve(xs: list, ys: list[int | float], samples_per_seg: int = 24):
+    """Build a dense curve that still passes through every data point.
+
+    Uses PCHIP when SciPy is available (shape-preserving, no overshoot).
+    Falls back to piecewise linear densification otherwise.
+    xs may be datetime or numeric.
+    """
+    n = len(xs)
+    if n == 0:
+        return [], []
+    if n == 1:
+        return list(xs), list(ys)
+
+    import matplotlib.dates as mdates
+    import numpy as np
+
+    # Work in float space (matplotlib date numbers for timestamps).
+    if hasattr(xs[0], "timestamp"):
+        x_num = np.asarray([mdates.date2num(x) for x in xs], dtype=float)
+        to_x = mdates.num2date
+    else:
+        x_num = np.asarray(xs, dtype=float)
+        to_x = lambda v: v  # noqa: E731
+
+    y_num = np.asarray(ys, dtype=float)
+    # Drop duplicate x (same timestamp) by keeping last score - PCHIP needs unique x.
+    order = np.argsort(x_num, kind="mergesort")
+    x_num = x_num[order]
+    y_num = y_num[order]
+    uniq_x: list[float] = []
+    uniq_y: list[float] = []
+    for x_v, y_v in zip(x_num, y_num):
+        if uniq_x and abs(x_v - uniq_x[-1]) < 1e-12:
+            uniq_y[-1] = float(y_v)
+        else:
+            uniq_x.append(float(x_v))
+            uniq_y.append(float(y_v))
+    x_num = np.asarray(uniq_x, dtype=float)
+    y_num = np.asarray(uniq_y, dtype=float)
+    if len(x_num) == 1:
+        return [to_x(x_num[0])], [float(y_num[0])]
+
+    dense_count = max(len(x_num) * samples_per_seg, len(x_num) * 2)
+    x_dense = np.linspace(x_num[0], x_num[-1], dense_count)
+
+    try:
+        from scipy.interpolate import PchipInterpolator
+
+        y_dense = PchipInterpolator(x_num, y_num)(x_dense)
+    except Exception:
+        y_dense = np.interp(x_dense, x_num, y_num)
+
+    return [to_x(v) for v in x_dense], [float(v) for v in y_dense]
+
+
+def plot_score_series(
+    ax,
+    xs: list,
+    ys: list[int],
+    *,
+    color: str,
+    marker: str,
+    label: str,
+    smooth: bool,
+    markersize: float = 4,
+    linewidth: float = 1.4,
+) -> None:
+    """Plot a mode series; with smooth=True keep exact markers and a curved line."""
+    if not xs:
+        return
+    if not smooth or len(xs) < 2:
+        ax.plot(
+            xs,
+            ys,
+            color=color,
+            marker=marker,
+            linestyle="-",
+            linewidth=linewidth,
+            markersize=markersize,
+            label=label,
+        )
+        return
+
+    # Exact scores as markers only (precision preserved).
+    ax.plot(
+        xs,
+        ys,
+        color=color,
+        marker=marker,
+        linestyle="None",
+        markersize=markersize,
+        label=label,
+    )
+    # Smooth stroke through those same points (no extra legend entry).
+    sx, sy = smooth_curve(xs, ys)
+    ax.plot(
+        sx,
+        sy,
+        color=color,
+        linestyle="-",
+        linewidth=linewidth,
+        marker="None",
+    )
+
+
+def plot_player_scores(
+    games: list[Game],
+    name: str,
+    save_path: Path | None = None,
+    show: bool = True,
+    theme: str = "light",
+    roll_window: int = 5,
+    smooth: bool = False,
+) -> Path | None:
+    """Plot one player's scores over time with matplotlib.
+
+    Games without a SubmittedAt are plotted by run index at the end.
+    Returns the path written when saving, otherwise None.
+    """
+    dated = [g for g in games if g.submitted is not None]
+    undated = [g for g in games if g.submitted is None]
+    dated.sort(key=lambda g: g.submitted or datetime.min)
+
+    if not dated and not undated:
+        raise ValueError(f"no games to plot for {name}")
+
+    # Headless / explicit save → non-interactive backend.
+    import matplotlib
+
+    want_show = show and save_path is None and bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+    if not want_show:
+        matplotlib.use("Agg")
+    import matplotlib.dates as mdates
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(10, 5.5))
+    colors = apply_plot_theme(fig, ax, theme)
+    palette = list(colors["palette"])  # type: ignore[arg-type]
+    used_indexes: set[int] = set()
+
+    plotted_any = False
+    by_mode: dict[str, list[Game]] = {}
+    for game in dated:
+        by_mode.setdefault(plot_mode_key(game.mode), []).append(game)
+
+    for mode, mode_games in sorted(by_mode.items()):
+        mode_games = sort_games_for_series(mode_games)
+        style = mode_series_style(mode, palette, used_indexes)
+        xs = [g.submitted for g in mode_games]
+        ys = [g.score for g in mode_games]
+        plot_score_series(
+            ax,
+            xs,
+            ys,
+            color=style["color"],
+            marker=style["marker"],
+            label=style["label"],
+            smooth=smooth,
+        )
+        plotted_any = True
+
+    if undated:
+        # Fallback markers when timestamps are missing (x = run order).
+        start = len(dated) + 1
+        xs_i = list(range(start, start + len(undated)))
+        ys = [g.score for g in undated]
+        if plotted_any:
+            print(
+                f"Note: {len(undated)} run(s) without SubmittedAt omitted from time axis.",
+                file=sys.stderr,
+            )
+        else:
+            ax.plot(
+                xs_i,
+                ys,
+                color=str(colors["fallback"]),
+                marker="x",
+                linestyle="--",
+                label="no timestamp",
+            )
+            ax.set_xlabel("Run # (missing SubmittedAt)")
+
+    if dated:
+        classic_dated = [g for g in dated if not is_hardcore_mode(g.mode)]
+        hardcore_dated = [g for g in dated if is_hardcore_mode(g.mode)]
+
+        if classic_dated:
+            best_xs, best_ys = running_personal_best(classic_dated)
+            ax.plot(
+                best_xs,
+                best_ys,
+                color=str(colors["best"]),
+                linewidth=1.2,
+                linestyle=":",
+                label="personal best",
+            )
+        if hardcore_dated:
+            hc_xs, hc_ys = running_personal_best(hardcore_dated)
+            ax.plot(
+                hc_xs,
+                hc_ys,
+                color=str(colors["best_hardcore"]),
+                linewidth=1.2,
+                linestyle=":",
+                label="hardcore personal best",
+            )
+
+        plot_rolling_average(
+            ax,
+            classic_dated,
+            roll_window,
+            str(colors["roll"]),
+            "rolling avg",
+        )
+        plot_rolling_average(
+            ax,
+            hardcore_dated,
+            roll_window,
+            str(colors["roll_hardcore"]),
+            "hardcore rolling avg",
+        )
+
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d %H:%M"))
+        ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+        fig.autofmt_xdate()
+        ax.set_xlabel("Submitted at")
+
+    ax.set_ylabel("Score")
+    ax.set_title(f"{name} - score over time ({len(games)} runs)")
+    legend = ax.legend(loc="best", framealpha=0.92)
+    if theme == "dark":
+        legend.get_frame().set_facecolor("#1a1d26")
+        legend.get_frame().set_edgecolor("#3c4048")
+        for text in legend.get_texts():
+            text.set_color("#e8eaed")
+    fig.tight_layout()
+
+    save_kwargs = {"dpi": 140, "facecolor": fig.get_facecolor()}
+    out_path: Path | None = None
+    if save_path is not None:
+        out_path = save_path.expanduser()
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(out_path, **save_kwargs)
+        print(f"Wrote plot: {out_path}")
+    elif not want_show:
+        safe = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in name)
+        out_path = Path(f"/tmp/highscore-{safe}.png")
+        fig.savefig(out_path, **save_kwargs)
+        print(f"No display; wrote plot: {out_path}")
+    else:
+        plt.show()
+
+    plt.close(fig)
+    return out_path
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "name",
+        nargs="?",
+        help="player name (case-insensitive). Omit to include everyone.",
+    )
+    parser.add_argument(
+        "-n",
+        type=int,
+        metavar="N",
+        help="only use the N most recent games (after name/mode filters)",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["classic", "classic-mobile"],
+        help="limit to one board mode",
+    )
+    parser.add_argument(
+        "--file",
+        type=Path,
+        default=DEFAULT_PATH,
+        help=f"highscores JSON path (default: {DEFAULT_PATH})",
+    )
+    parser.add_argument(
+        "--plot",
+        action="store_true",
+        help="plot score over time for the given player (requires name)",
+    )
+    parser.add_argument(
+        "--save",
+        type=Path,
+        metavar="PATH",
+        help="save the plot image to PATH (implies --plot; useful over SSH)",
+    )
+    parser.add_argument(
+        "--theme",
+        choices=["light", "dark"],
+        default="light",
+        help="plot color theme (default: light)",
+    )
+    parser.add_argument(
+        "--roll",
+        type=int,
+        default=5,
+        metavar="N",
+        help="rolling average window in games (default: 5)",
+    )
+    parser.add_argument(
+        "--smooth",
+        action="store_true",
+        help="smooth mode lines while keeping exact score markers",
+    )
+    args = parser.parse_args()
+
+    if args.n is not None and args.n < 0:
+        print("-n must be >= 0", file=sys.stderr)
+        return 2
+    if args.roll < 1:
+        print("--roll must be >= 1", file=sys.stderr)
+        return 2
+    if args.save is not None:
+        args.plot = True
+    if args.plot and not args.name:
+        print("--plot requires a player name", file=sys.stderr)
+        return 2
+    if not args.file.is_file():
+        print(f"file not found: {args.file}", file=sys.stderr)
+        return 1
+
+    games = load_games(args.file, args.mode)
+    selected = filter_games(games, args.name, args.n)
+    if args.name and not selected:
+        print(f"No games found for player '{args.name}'.", file=sys.stderr)
+        known = sorted({g.name for g in games}, key=str.casefold)
+        if known:
+            preview = ", ".join(known[:20])
+            more = "" if len(known) <= 20 else f" (+{len(known) - 20} more)"
+            print(f"Known players: {preview}{more}", file=sys.stderr)
+        return 1
+
+    players = aggregate(selected)
+    print_stats(players, len(selected), args.name, args.n, args.mode)
+
+    if args.plot:
+        # Chronological plot uses the same filtered sample as the table.
+        try:
+            plot_player_scores(
+                selected,
+                args.name,
+                save_path=args.save,
+                show=args.save is None,
+                theme=args.theme,
+                roll_window=args.roll,
+                smooth=args.smooth,
+            )
+        except Exception as exc:
+            print(f"Plot failed: {exc}", file=sys.stderr)
+            return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

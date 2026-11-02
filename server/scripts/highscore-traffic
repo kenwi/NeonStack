@@ -1,0 +1,635 @@
+#!/usr/bin/env python3
+"""Traffic statistics from Neon Stack highscore server logs.
+
+Parses RequestLoggingMiddleware lines (one HTTP request each) from
+server-YYYY-MM-DD.log files. Prints bucketed traffic tables and optional
+matplotlib charts (same theme/save style as highscore-stats).
+
+Examples:
+  highscore-traffic
+  highscore-traffic --days 7 --bucket day
+  highscore-traffic --plot --theme dark
+  highscore-traffic --plot --save ~/traffic.png
+  highscore-traffic --since 2026-10-30 --until 2026-11-01
+  highscore-traffic -v
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import sys
+from collections import Counter, defaultdict
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
+from pathlib import Path
+
+LOG_DIR = Path(os.environ.get(
+    "HIGHSCORE_LOG_DIR",
+    "/home/kenwi/Work/tetris/server/data/logs",
+))
+
+TS_RE = re.compile(r"^\[(\d{2}\.\d{2}\.\d{4} \d{2}:\d{2}:\d{2})\] \[(\w+)\]")
+# Middleware: HTTP GET /api/scores/classic?top=10 -> 200 (1ms)
+HTTP_RE = re.compile(
+    r"HTTP (GET|POST|OPTIONS|PUT|DELETE|HEAD|PATCH) ([^\s]+) -> (\d+) \((\d+)ms\)"
+)
+CLIENT_IP_RE = re.compile(r"ClientIp=(\S+)")
+ORIGIN_RE = re.compile(r"Origin=(\S+)")
+UA_RE = re.compile(r"UserAgent=(.+?)(?:\s+SpanId=|\s+TraceId=|\])")
+
+# Kind order used in tables and stacked charts.
+KIND_ORDER = ("read", "submit", "replay_up", "replay_down", "cors", "other")
+KIND_LABELS = {
+    "read": "board reads",
+    "submit": "score posts",
+    "replay_up": "replay uploads",
+    "replay_down": "replay downloads",
+    "cors": "CORS preflight",
+    "other": "other",
+}
+
+# Palette aligned with highscore-stats light/dark themes.
+KIND_COLORS_LIGHT = {
+    "read": "#3aa0ff",
+    "submit": "#2bb673",
+    "replay_up": "#ff7a3a",
+    "replay_down": "#9b59b6",
+    "cors": "#9aa0a6",
+    "other": "#d4a017",  # gold-olive - distinct from gray CORS
+}
+KIND_COLORS_DARK = {
+    "read": "#5eb1ff",
+    "submit": "#5bd68a",
+    "replay_up": "#ff9a5c",
+    "replay_down": "#c792ea",
+    "cors": "#9aa0a6",
+    "other": "#ffd54f",  # amber - distinct from gray CORS
+}
+
+
+@dataclass
+class Request:
+    ts: datetime
+    method: str
+    path: str  # includes query string
+    status: int
+    elapsed_ms: int
+    kind: str
+    client_ip: str = ""
+    origin: str = ""
+    user_agent: str = ""
+
+    @property
+    def path_only(self) -> str:
+        return self.path.split("?", 1)[0]
+
+    @property
+    def mode(self) -> str | None:
+        if self.kind != "read":
+            return None
+        # /api/scores/{modeId}
+        parts = self.path_only.rstrip("/").split("/")
+        if len(parts) >= 4 and parts[1] == "api" and parts[2] == "scores":
+            return parts[3] or None
+        return None
+
+    @property
+    def ok(self) -> bool:
+        return 200 <= self.status < 400
+
+
+@dataclass
+class Bucket:
+    key: datetime
+    label: str
+    by_kind: Counter = field(default_factory=Counter)
+    status_2xx: int = 0
+    status_4xx: int = 0
+    status_5xx: int = 0
+    elapsed_sum: int = 0
+    ips: set[str] = field(default_factory=set)
+
+    @property
+    def total(self) -> int:
+        return sum(self.by_kind.values())
+
+    @property
+    def avg_ms(self) -> float:
+        return self.elapsed_sum / self.total if self.total else 0.0
+
+
+def parse_ts(raw: str) -> datetime | None:
+    try:
+        return datetime.strptime(raw, "%d.%m.%Y %H:%M:%S")
+    except ValueError:
+        return None
+
+
+def classify(method: str, path: str) -> str:
+    path_only = path.split("?", 1)[0]
+    if method == "OPTIONS":
+        return "cors"
+    if method == "GET" and path_only.startswith("/api/scores"):
+        return "read"
+    if method == "POST" and path_only.rstrip("/") == "/api/scores":
+        return "submit"
+    if method == "POST" and path_only.rstrip("/") == "/api/replays":
+        return "replay_up"
+    if method == "GET" and path_only.startswith("/api/replays"):
+        return "replay_down"
+    return "other"
+
+
+def short_ua(ua: str) -> str:
+    if not ua or ua == "(none)":
+        return "?"
+    if "GodotEngine" in ua:
+        return "godot"
+    if "iPhone" in ua or "iPad" in ua:
+        return "ios"
+    if "Android" in ua:
+        return "android"
+    if "Firefox" in ua:
+        return "firefox"
+    if "Edg/" in ua:
+        return "edge"
+    if "Chrome" in ua:
+        return "chrome"
+    if "curl/" in ua:
+        return "curl"
+    return "browser"
+
+
+def parse_http_line(line: str) -> Request | None:
+    tm = TS_RE.match(line)
+    if not tm:
+        return None
+    if "RequestLoggingMiddleware" not in line and "HTTP " not in line:
+        return None
+    http = HTTP_RE.search(line)
+    if not http:
+        return None
+    ts = parse_ts(tm.group(1))
+    if ts is None:
+        return None
+
+    method, path, status_s, ms_s = http.groups()
+    ip_m = CLIENT_IP_RE.search(line)
+    origin_m = ORIGIN_RE.search(line)
+    ua_m = UA_RE.search(line)
+    return Request(
+        ts=ts,
+        method=method,
+        path=path,
+        status=int(status_s),
+        elapsed_ms=int(ms_s),
+        kind=classify(method, path),
+        client_ip=(ip_m.group(1) if ip_m else "").rstrip(","),
+        origin=(origin_m.group(1) if origin_m else "").rstrip(","),
+        user_agent=(ua_m.group(1).strip() if ua_m else ""),
+    )
+
+
+def list_log_files(log_dir: Path, since: date | None, until: date | None) -> list[Path]:
+    files = sorted(log_dir.glob("server-*.log"))
+    out: list[Path] = []
+    for path in files:
+        # server-2026-11-02.log
+        stem = path.stem  # server-2026-11-02
+        try:
+            day = datetime.strptime(stem.split("-", 1)[1], "%Y-%m-%d").date()
+        except (IndexError, ValueError):
+            out.append(path)
+            continue
+        if since is not None and day < since:
+            continue
+        if until is not None and day > until:
+            continue
+        out.append(path)
+    return out
+
+
+def load_requests(
+    log_dir: Path,
+    since: date | None,
+    until: date | None,
+) -> list[Request]:
+    files = list_log_files(log_dir, since, until)
+    requests: list[Request] = []
+    for path in files:
+        with path.open("r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                req = parse_http_line(line)
+                if req is None:
+                    continue
+                day = req.ts.date()
+                if since is not None and day < since:
+                    continue
+                if until is not None and day > until:
+                    continue
+                requests.append(req)
+    requests.sort(key=lambda r: r.ts)
+    return requests
+
+
+def bucket_key(ts: datetime, bucket: str) -> tuple[datetime, str]:
+    if bucket == "day":
+        key = datetime(ts.year, ts.month, ts.day)
+        return key, key.strftime("%Y-%m-%d")
+    if bucket == "hour":
+        key = datetime(ts.year, ts.month, ts.day, ts.hour)
+        return key, key.strftime("%Y-%m-%d %H:00")
+    raise ValueError(f"unknown bucket: {bucket}")
+
+
+def aggregate(requests: list[Request], bucket: str) -> list[Bucket]:
+    by_key: dict[datetime, Bucket] = {}
+    for req in requests:
+        key, label = bucket_key(req.ts, bucket)
+        b = by_key.get(key)
+        if b is None:
+            b = Bucket(key=key, label=label)
+            by_key[key] = b
+        b.by_kind[req.kind] += 1
+        b.elapsed_sum += req.elapsed_ms
+        if req.client_ip and req.client_ip != "unknown":
+            b.ips.add(req.client_ip)
+        if req.status >= 500:
+            b.status_5xx += 1
+        elif req.status >= 400:
+            b.status_4xx += 1
+        elif req.status >= 200:
+            b.status_2xx += 1
+    return [by_key[k] for k in sorted(by_key)]
+
+
+def fmt_int(n: int) -> str:
+    return f"{n:,}".replace(",", " ")
+
+
+def print_table(buckets: list[Bucket], verbose: bool) -> None:
+    if not buckets:
+        print("No HTTP requests in range.")
+        return
+
+    headers = ["When", "Total", "Reads", "Submit", "Replay↑", "Replay↓", "CORS", "Other", "IPs", "Avg ms"]
+    if verbose:
+        headers.extend(["2xx", "4xx", "5xx"])
+
+    rows: list[list[str]] = []
+    for b in buckets:
+        row = [
+            b.label,
+            fmt_int(b.total),
+            fmt_int(b.by_kind["read"]),
+            fmt_int(b.by_kind["submit"]),
+            fmt_int(b.by_kind["replay_up"]),
+            fmt_int(b.by_kind["replay_down"]),
+            fmt_int(b.by_kind["cors"]),
+            fmt_int(b.by_kind["other"]),
+            fmt_int(len(b.ips)),
+            f"{b.avg_ms:.1f}",
+        ]
+        if verbose:
+            row.extend([fmt_int(b.status_2xx), fmt_int(b.status_4xx), fmt_int(b.status_5xx)])
+        rows.append(row)
+
+    widths = [len(h) for h in headers]
+    for row in rows:
+        for i, cell in enumerate(row):
+            widths[i] = max(widths[i], len(cell))
+
+    def fmt_row(cols: list[str]) -> str:
+        parts = []
+        for i, cell in enumerate(cols):
+            parts.append(cell.ljust(widths[i]) if i == 0 else cell.rjust(widths[i]))
+        return "  ".join(parts)
+
+    print(fmt_row(headers))
+    print("  ".join("-" * w for w in widths))
+    for row in rows:
+        print(fmt_row(row))
+
+
+def print_summary(requests: list[Request], buckets: list[Bucket]) -> None:
+    if not requests:
+        return
+
+    by_kind: Counter[str] = Counter(r.kind for r in requests)
+    by_status: Counter[str] = Counter()
+    for r in requests:
+        if r.status >= 500:
+            by_status["5xx"] += 1
+        elif r.status >= 400:
+            by_status["4xx"] += 1
+        elif r.status >= 200:
+            by_status["2xx"] += 1
+        else:
+            by_status["other"] += 1
+
+    ips = {r.client_ip for r in requests if r.client_ip and r.client_ip != "unknown"}
+    origins = Counter(
+        r.origin for r in requests if r.origin and r.origin not in ("", "(none)")
+    )
+    uas = Counter(short_ua(r.user_agent) for r in requests)
+    modes = Counter(r.mode for r in requests if r.mode)
+    latencies = sorted(r.elapsed_ms for r in requests)
+    n = len(latencies)
+    p50 = latencies[n // 2] if n else 0
+    p95 = latencies[int(n * 0.95)] if n else 0
+    p99 = latencies[min(n - 1, int(n * 0.99))] if n else 0
+    avg_ms = sum(latencies) / n if n else 0.0
+
+    first = requests[0].ts
+    last = requests[-1].ts
+    print()
+    print(f"Summary  ({first.strftime('%Y-%m-%d %H:%M')} → {last.strftime('%Y-%m-%d %H:%M')})")
+    print(f"  Requests:     {fmt_int(n)} across {len(buckets)} bucket(s)")
+    print(f"  Unique IPs:   {fmt_int(len(ips))}")
+    print(f"  Latency:      avg {avg_ms:.1f}ms  p50 {p50}ms  p95 {p95}ms  p99 {p99}ms")
+    print(
+        "  Status:       "
+        + ", ".join(f"{k}={fmt_int(by_status[k])}" for k in ("2xx", "4xx", "5xx", "other") if by_status[k])
+    )
+    print("  By kind:")
+    for kind in KIND_ORDER:
+        count = by_kind.get(kind, 0)
+        if not count:
+            continue
+        pct = 100.0 * count / n
+        print(f"    {KIND_LABELS[kind]:<18} {fmt_int(count):>8}  ({pct:5.1f}%)")
+
+    if modes:
+        print("  Top board reads:")
+        for mode, count in modes.most_common(12):
+            print(f"    {mode:<36} {fmt_int(count):>6}")
+
+    if origins:
+        print("  Origins:")
+        for origin, count in origins.most_common(8):
+            print(f"    {origin:<44} {fmt_int(count):>6}")
+
+    if uas:
+        print("  Clients:")
+        for ua, count in uas.most_common():
+            print(f"    {ua:<12} {fmt_int(count):>8}")
+
+
+def apply_plot_theme(fig, ax, theme: str) -> dict[str, str]:
+    """Match highscore-stats light/dark theming."""
+    if theme == "dark":
+        bg, panel, text, grid = "#12141a", "#1a1d26", "#e8eaed", "#3c4048"
+        kind_colors = KIND_COLORS_DARK
+    else:
+        bg, panel, text, grid = "#ffffff", "#ffffff", "#202124", "#dadce0"
+        kind_colors = KIND_COLORS_LIGHT
+
+    fig.patch.set_facecolor(bg)
+    ax.set_facecolor(panel)
+    ax.tick_params(colors=text)
+    ax.xaxis.label.set_color(text)
+    ax.yaxis.label.set_color(text)
+    ax.title.set_color(text)
+    for spine in ax.spines.values():
+        spine.set_color(grid)
+    ax.grid(True, axis="y", alpha=0.35, color=grid)
+    return kind_colors
+
+
+def plot_traffic(
+    buckets: list[Bucket],
+    *,
+    bucket: str,
+    theme: str = "light",
+    save_path: Path | None = None,
+    show: bool = True,
+    stacked: bool = True,
+) -> Path | None:
+    if not buckets:
+        raise ValueError("no buckets to plot")
+
+    import matplotlib
+
+    want_show = show and save_path is None and bool(
+        os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
+    )
+    if not want_show:
+        matplotlib.use("Agg")
+    import matplotlib.dates as mdates
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    fig, ax = plt.subplots(figsize=(11, 5.5))
+    kind_colors = apply_plot_theme(fig, ax, theme)
+
+    xs = [b.key for b in buckets]
+    active_kinds = [k for k in KIND_ORDER if any(b.by_kind[k] for b in buckets)]
+
+    if stacked:
+        bottoms = np.zeros(len(buckets), dtype=float)
+        # Bar width: ~80% of bucket span.
+        if bucket == "day":
+            width = timedelta(hours=18)
+        else:
+            width = timedelta(minutes=48)
+        for kind in active_kinds:
+            heights = np.asarray([b.by_kind[kind] for b in buckets], dtype=float)
+            ax.bar(
+                xs,
+                heights,
+                width=width,
+                bottom=bottoms,
+                color=kind_colors[kind],
+                label=KIND_LABELS[kind],
+                align="center",
+                edgecolor="none",
+            )
+            bottoms = bottoms + heights
+    else:
+        for kind in active_kinds:
+            ys = [b.by_kind[kind] for b in buckets]
+            ax.plot(
+                xs,
+                ys,
+                color=kind_colors[kind],
+                marker="o",
+                markersize=3.5,
+                linewidth=1.6,
+                label=KIND_LABELS[kind],
+            )
+
+    if bucket == "day":
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d"))
+        ax.xaxis.set_major_locator(mdates.DayLocator())
+    else:
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d %H:%M"))
+        ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+    fig.autofmt_xdate()
+
+    total = sum(b.total for b in buckets)
+    ax.set_xlabel("Time")
+    ax.set_ylabel("Requests")
+    ax.set_title(f"API traffic over time ({fmt_int(total)} requests, by {bucket})")
+    legend = ax.legend(loc="best", framealpha=0.92)
+    if theme == "dark":
+        legend.get_frame().set_facecolor("#1a1d26")
+        legend.get_frame().set_edgecolor("#3c4048")
+        for text in legend.get_texts():
+            text.set_color("#e8eaed")
+    fig.tight_layout()
+
+    save_kwargs = {"dpi": 140, "facecolor": fig.get_facecolor()}
+    out_path: Path | None = None
+    if save_path is not None:
+        out_path = save_path.expanduser()
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(out_path, **save_kwargs)
+        print(f"Wrote plot: {out_path}")
+    elif not want_show:
+        out_path = Path("/tmp/highscore-traffic.png")
+        fig.savefig(out_path, **save_kwargs)
+        print(f"No display; wrote plot: {out_path}")
+    else:
+        plt.show()
+
+    plt.close(fig)
+    return out_path
+
+
+def parse_day(raw: str) -> date:
+    return datetime.strptime(raw, "%Y-%m-%d").date()
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "-d", "--log-dir",
+        type=Path,
+        default=LOG_DIR,
+        help=f"log directory (default: {LOG_DIR})",
+    )
+    parser.add_argument(
+        "--bucket",
+        choices=["hour", "day"],
+        default="hour",
+        help="time bucket size (default: hour)",
+    )
+    parser.add_argument(
+        "--days",
+        type=int,
+        metavar="N",
+        help="only include the last N calendar days (inclusive of today)",
+    )
+    parser.add_argument(
+        "--since",
+        type=str,
+        metavar="YYYY-MM-DD",
+        help="include log days on/after this date",
+    )
+    parser.add_argument(
+        "--until",
+        type=str,
+        metavar="YYYY-MM-DD",
+        help="include log days on/before this date",
+    )
+    parser.add_argument(
+        "-v", "--verbose",
+        action="store_true",
+        help="include 2xx/4xx/5xx columns in the table",
+    )
+    parser.add_argument(
+        "--plot",
+        action="store_true",
+        help="plot request counts over time (matplotlib)",
+    )
+    parser.add_argument(
+        "--lines",
+        action="store_true",
+        help="with --plot, draw lines instead of stacked bars",
+    )
+    parser.add_argument(
+        "--save",
+        type=Path,
+        metavar="PATH",
+        help="save the plot image to PATH (implies --plot)",
+    )
+    parser.add_argument(
+        "--theme",
+        choices=["light", "dark"],
+        default="light",
+        help="plot color theme (default: light)",
+    )
+    args = parser.parse_args()
+
+    if args.save is not None:
+        args.plot = True
+    if args.days is not None and args.days < 1:
+        print("--days must be >= 1", file=sys.stderr)
+        return 2
+
+    since: date | None = None
+    until: date | None = None
+    try:
+        if args.since:
+            since = parse_day(args.since)
+        if args.until:
+            until = parse_day(args.until)
+    except ValueError as exc:
+        print(f"bad date: {exc}", file=sys.stderr)
+        return 2
+
+    if args.days is not None:
+        today = date.today()
+        since_days = today - timedelta(days=args.days - 1)
+        since = max(since, since_days) if since else since_days
+        until = min(until, today) if until else today
+
+    if since and until and since > until:
+        print("--since must be on/before --until", file=sys.stderr)
+        return 2
+
+    if not args.log_dir.is_dir():
+        print(f"log dir not found: {args.log_dir}", file=sys.stderr)
+        return 1
+
+    files = list_log_files(args.log_dir, since, until)
+    if not files:
+        print(f"no server-*.log matching range in {args.log_dir}", file=sys.stderr)
+        return 1
+
+    requests = load_requests(args.log_dir, since, until)
+    buckets = aggregate(requests, args.bucket)
+
+    scope_bits = [f"bucket={args.bucket}", f"files={len(files)}"]
+    if since:
+        scope_bits.append(f"since={since.isoformat()}")
+    if until:
+        scope_bits.append(f"until={until.isoformat()}")
+    print(f"Highscore traffic  ({', '.join(scope_bits)})")
+    print()
+    print_table(buckets, verbose=args.verbose)
+    print_summary(requests, buckets)
+
+    if args.plot:
+        try:
+            plot_traffic(
+                buckets,
+                bucket=args.bucket,
+                theme=args.theme,
+                save_path=args.save,
+                show=args.save is None,
+                stacked=not args.lines,
+            )
+        except Exception as exc:
+            print(f"Plot failed: {exc}", file=sys.stderr)
+            return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
