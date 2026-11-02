@@ -12,6 +12,7 @@ services:
       ASPNETCORE_ENVIRONMENT: Production
       ASPNETCORE_URLS: http://0.0.0.0:5090
       Highscores__FilePath: /data/highscores.json
+      Highscores__ChallengesFilePath: /data/challenges.json
       Highscores__ReplayDirectory: /data/replays
       Logging__File__Path: /data/logs/server.log
       Discord__WebhookUrl: ${DISCORD_WEBHOOK_URL:-}

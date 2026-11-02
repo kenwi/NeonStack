@@ -17,6 +17,7 @@ A stylized neon Tetris clone built with **Godot 4.7**. Play in the browser or on
 - **Classic** vs **Hardcore** difficulty (Infinity lock resets vs never)
 - **Classic / Daily / Weekly** modes with shared UTC seeds for daily and weekly
 - Separate desktop and mobile leaderboards
+- Private challenge boards (custom name, share link, locked mode/difficulty)
 - Touch-primary layout with upper-zone DAS and on-screen controls
 - Cycleable color themes, neon backdrops, juice FX, and in-game music
 - Live top-10 rank greetings during a run
@@ -89,6 +90,10 @@ Pick difficulty and mode family from the mode menu (Esc).
 | Weekly | Shared ISO week (Monday UTC) | `weekly-YYYY-Www`, `…-mobile` |
 
 **Hardcore** prefixes those ids (`hardcore`, `hardcore-daily-…`, `hardcore-weekly-…`) and disables lock-delay resets. Classic difficulty keeps Infinity-style lock resets (capped in-engine). Desktop and touch-primary sessions use separate boards so phone and keyboard runs do not compete on the same list.
+
+### Private challenges
+
+From the mode menu, **CHALLENGE** creates a private leaderboard with a custom name and locked Classic/Daily/Weekly + Classic/Hardcore settings. The API returns an opaque token; share `https://<game>/?c=<token>`. Friends who open the link join that board automatically. Scores use mode ids `c_{token}` / `c_{token}-mobile` (desktop and mobile still split). Daily/Weekly challenges freeze the UTC period seed at create time.
 
 ---
 

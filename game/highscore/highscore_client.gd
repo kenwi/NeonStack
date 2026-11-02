@@ -4,6 +4,7 @@ extends Node2D
 
 const HighscoreConfig = preload("res://game/highscore/highscore_config.gd")
 const HighscoreChecksum = preload("res://game/highscore/highscore_checksum.gd")
+const ChallengeConfig = preload("res://game/challenge/challenge_config.gd")
 const PlayDevice = preload("res://game/platform/play_device.gd")
 const GameModes = preload("res://game/mode/game_modes.gd")
 const ReplayFormat = preload("res://game/replay/replay_format.gd")
@@ -35,6 +36,11 @@ var _view_family := GameModes.CLASSIC
 var _view_difficulty := GameModes.DIFFICULTY_CLASSIC
 var _view_mobile := false
 var _view_period_unix := 0
+var _challenge_token := ""
+var _challenge_name := ""
+var _challenge_family := GameModes.CLASSIC
+var _challenge_difficulty := GameModes.DIFFICULTY_CLASSIC
+var _challenge_period_unix := -1
 
 var _submit_gen := 0
 var _leaderboard_gen := 0
@@ -125,6 +131,9 @@ func set_game_mode(
 	unix_utc: int = -1,
 	difficulty: String = GameModes.DIFFICULTY_CLASSIC
 ) -> void:
+	if is_challenge_active():
+		_apply_challenge_submit_mode()
+		return
 	if not GameModes.is_valid_family(game_mode):
 		return
 	var diff := difficulty if GameModes.is_valid_difficulty(difficulty) else GameModes.DIFFICULTY_CLASSIC
@@ -138,6 +147,67 @@ func set_game_mode(
 	_view_difficulty = diff
 	_view_mobile = PlayDevice.is_touch_primary()
 	_view_period_unix = unix_utc
+
+
+func is_challenge_active() -> bool:
+	return not _challenge_token.is_empty()
+
+
+func set_challenge_board(data: Dictionary) -> void:
+	var token := ChallengeConfig.sanitize_token(str(data.get("id", "")))
+	if token.is_empty():
+		clear_challenge_board()
+		return
+	_challenge_token = token
+	_challenge_name = str(data.get("name", "Challenge"))
+	var family := str(data.get("family", GameModes.CLASSIC)).to_lower()
+	_challenge_family = family if GameModes.is_valid_family(family) else GameModes.CLASSIC
+	var diff := str(data.get("difficulty", GameModes.DIFFICULTY_CLASSIC)).to_lower()
+	_challenge_difficulty = diff if GameModes.is_valid_difficulty(diff) else GameModes.DIFFICULTY_CLASSIC
+	var period = data.get("periodUnix", data.get("period_unix", null))
+	if period != null and str(period) != "" and str(period) != "null" and int(period) > 0:
+		_challenge_period_unix = int(period)
+	else:
+		_challenge_period_unix = -1
+	_game_mode = _challenge_family
+	_game_difficulty = _challenge_difficulty
+	_apply_challenge_submit_mode()
+
+
+func clear_challenge_board() -> void:
+	_challenge_token = ""
+	_challenge_name = ""
+	_challenge_family = GameModes.CLASSIC
+	_challenge_difficulty = GameModes.DIFFICULTY_CLASSIC
+	_challenge_period_unix = -1
+
+
+func _apply_challenge_submit_mode() -> void:
+	if _challenge_token.is_empty():
+		return
+	submit_mode_id = ChallengeConfig.score_mode_id(_challenge_token, PlayDevice.is_touch_primary())
+	view_mode_id = submit_mode_id
+	_view_family = _challenge_family
+	_view_difficulty = _challenge_difficulty
+	_view_mobile = PlayDevice.is_touch_primary()
+	if _challenge_period_unix > 0:
+		_view_period_unix = _challenge_period_unix
+	else:
+		_view_period_unix = GameModes.utc_now_unix()
+
+
+func open_challenge_leaderboard() -> void:
+	if not is_challenge_active():
+		open_leaderboard()
+		return
+	if is_capturing_input():
+		return
+	_apply_challenge_submit_mode()
+	leaderboard_open = true
+	leaderboard_page = 0
+	phase = Phase.LEADERBOARD
+	_fetch_leaderboard()
+	queue_redraw()
 
 
 func reset_run() -> void:
@@ -193,6 +263,9 @@ func begin_game_over(score: int, lines: int, level: int, elapsed_seconds: float)
 func open_leaderboard() -> void:
 	if is_capturing_input():
 		return
+	if is_challenge_active():
+		open_challenge_leaderboard()
+		return
 	view_mode_id = submit_mode_id
 	_sync_view_from_board_id(view_mode_id)
 	leaderboard_open = true
@@ -210,6 +283,9 @@ func open_leaderboard_view(
 	## Browse a board without changing the active submit mode for the current run.
 	if is_capturing_input():
 		return
+	if is_challenge_active():
+		open_challenge_leaderboard()
+		return
 	if not GameModes.is_valid_family(game_mode):
 		open_leaderboard()
 		return
@@ -226,6 +302,15 @@ func open_leaderboard_view(
 
 
 func _sync_view_from_board_id(board_id: String) -> void:
+	if is_challenge_active() or GameModes.is_challenge_board(board_id):
+		_view_family = _challenge_family if is_challenge_active() else GameModes.CLASSIC
+		_view_difficulty = _challenge_difficulty if is_challenge_active() else GameModes.DIFFICULTY_CLASSIC
+		_view_mobile = GameModes.is_mobile_board(board_id)
+		if _challenge_period_unix > 0:
+			_view_period_unix = _challenge_period_unix
+		else:
+			_view_period_unix = GameModes.utc_now_unix()
+		return
 	_view_family = GameModes.family_from_board_id(board_id)
 	_view_difficulty = GameModes.difficulty_from_board_id(board_id)
 	_view_mobile = GameModes.is_mobile_board(board_id)
@@ -236,10 +321,14 @@ func _sync_view_from_board_id(board_id: String) -> void:
 
 
 func _rebuild_view_mode_id() -> String:
+	if is_challenge_active():
+		return ChallengeConfig.score_mode_id(_challenge_token, _view_mobile)
 	return GameModes.board_id(_view_family, _view_mobile, _view_period_unix, _view_difficulty)
 
 
 func _set_view_family(family: String) -> void:
+	if is_challenge_active():
+		return
 	if not GameModes.is_valid_family(family):
 		return
 	if _view_family == family:
@@ -250,6 +339,8 @@ func _set_view_family(family: String) -> void:
 
 
 func _set_view_difficulty(difficulty: String) -> void:
+	if is_challenge_active():
+		return
 	if not GameModes.is_valid_difficulty(difficulty):
 		return
 	if _view_difficulty == difficulty:
@@ -266,6 +357,8 @@ func _set_view_platform(mobile: bool) -> void:
 
 
 func _shift_view_period(delta: int) -> void:
+	if is_challenge_active():
+		return
 	if _view_family == GameModes.CLASSIC:
 		return
 	_view_period_unix = GameModes.shift_period_unix(_view_family, _view_period_unix, delta)
@@ -373,22 +466,26 @@ func handle_input(event: InputEvent) -> bool:
 		return true
 
 	if (leaderboard_open or phase == Phase.LEADERBOARD) and not is_capturing_input():
+		var can_shift_period := (
+			not is_challenge_active()
+			and _view_family != GameModes.CLASSIC
+		)
 		if _key_pressed(event, KEY_LEFT):
-			if _view_family != GameModes.CLASSIC and event.shift_pressed:
+			if can_shift_period and event.shift_pressed:
 				_shift_view_period(-1)
 			else:
 				_set_leaderboard_page(leaderboard_page - 1)
 			return true
 		if _key_pressed(event, KEY_RIGHT):
-			if _view_family != GameModes.CLASSIC and event.shift_pressed:
+			if can_shift_period and event.shift_pressed:
 				_shift_view_period(1)
 			else:
 				_set_leaderboard_page(leaderboard_page + 1)
 			return true
-		if _key_pressed(event, KEY_COMMA) and _view_family != GameModes.CLASSIC:
+		if _key_pressed(event, KEY_COMMA) and can_shift_period:
 			_shift_view_period(-1)
 			return true
-		if _key_pressed(event, KEY_PERIOD) and _view_family != GameModes.CLASSIC:
+		if _key_pressed(event, KEY_PERIOD) and can_shift_period:
 			_shift_view_period(1)
 			return true
 
@@ -518,32 +615,33 @@ func _handle_leaderboard_pointer(event: InputEvent) -> bool:
 		return false
 	_layout_leaderboard(get_viewport_rect().size)
 	var point := PlayDevice.pointer_down_position(event)
-	if _tab_classic_rect.has_point(point):
-		_set_view_family(GameModes.CLASSIC)
-		return true
-	if _tab_daily_rect.has_point(point):
-		_set_view_family(GameModes.DAILY)
-		return true
-	if _tab_weekly_rect.has_point(point):
-		_set_view_family(GameModes.WEEKLY)
-		return true
-	if _tab_diff_classic_rect.has_point(point):
-		_set_view_difficulty(GameModes.DIFFICULTY_CLASSIC)
-		return true
-	if _tab_diff_hardcore_rect.has_point(point):
-		_set_view_difficulty(GameModes.DIFFICULTY_HARDCORE)
-		return true
+	if not is_challenge_active():
+		if _tab_classic_rect.has_point(point):
+			_set_view_family(GameModes.CLASSIC)
+			return true
+		if _tab_daily_rect.has_point(point):
+			_set_view_family(GameModes.DAILY)
+			return true
+		if _tab_weekly_rect.has_point(point):
+			_set_view_family(GameModes.WEEKLY)
+			return true
+		if _tab_diff_classic_rect.has_point(point):
+			_set_view_difficulty(GameModes.DIFFICULTY_CLASSIC)
+			return true
+		if _tab_diff_hardcore_rect.has_point(point):
+			_set_view_difficulty(GameModes.DIFFICULTY_HARDCORE)
+			return true
+		if _period_prev_rect.size.x > 0.0 and _period_prev_rect.has_point(point):
+			_shift_view_period(-1)
+			return true
+		if _period_next_rect.size.x > 0.0 and _period_next_rect.has_point(point):
+			_shift_view_period(1)
+			return true
 	if _tab_desktop_rect.has_point(point):
 		_set_view_platform(false)
 		return true
 	if _tab_mobile_rect.has_point(point):
 		_set_view_platform(true)
-		return true
-	if _period_prev_rect.size.x > 0.0 and _period_prev_rect.has_point(point):
-		_shift_view_period(-1)
-		return true
-	if _period_next_rect.size.x > 0.0 and _period_next_rect.has_point(point):
-		_shift_view_period(1)
 		return true
 	for page_target in _page_hit_targets:
 		var page_rect: Rect2 = page_target.rect
@@ -810,23 +908,46 @@ func _draw_leaderboard_panel(vp: Vector2) -> void:
 	var hint_size := maxi(11, int(round(13 * ui_scale)))
 	var y := panel.position.y + 28.0 * ui_scale
 	_draw_centered(_title_font, Vector2(panel.get_center().x, y), _board_title(), title_size, ColorTheme.accent())
-	_draw_choice(_tab_classic_rect, "CLASSIC", _view_family == GameModes.CLASSIC)
-	_draw_choice(_tab_daily_rect, "DAILY", _view_family == GameModes.DAILY)
-	_draw_choice(_tab_weekly_rect, "WEEKLY", _view_family == GameModes.WEEKLY)
-	_draw_choice(
-		_tab_diff_classic_rect,
-		"CLASSIC",
-		_view_difficulty == GameModes.DIFFICULTY_CLASSIC
-	)
-	_draw_choice(
-		_tab_diff_hardcore_rect,
-		"HARDCORE",
-		_view_difficulty == GameModes.DIFFICULTY_HARDCORE
-	)
+	if not is_challenge_active():
+		_draw_choice(_tab_classic_rect, "CLASSIC", _view_family == GameModes.CLASSIC)
+		_draw_choice(_tab_daily_rect, "DAILY", _view_family == GameModes.DAILY)
+		_draw_choice(_tab_weekly_rect, "WEEKLY", _view_family == GameModes.WEEKLY)
+		_draw_choice(
+			_tab_diff_classic_rect,
+			"CLASSIC",
+			_view_difficulty == GameModes.DIFFICULTY_CLASSIC
+		)
+		_draw_choice(
+			_tab_diff_hardcore_rect,
+			"HARDCORE",
+			_view_difficulty == GameModes.DIFFICULTY_HARDCORE
+		)
 	_draw_choice(_tab_desktop_rect, "DESKTOP", not _view_mobile)
 	_draw_choice(_tab_mobile_rect, "MOBILE", _view_mobile)
 	y = _tab_desktop_rect.end.y + 18.0 * ui_scale
-	if _view_family != GameModes.CLASSIC:
+	if is_challenge_active():
+		var settings := "%s · %s" % [
+			str(GameModes.DIFFICULTY_LABELS.get(_challenge_difficulty, _challenge_difficulty)),
+			str(GameModes.FAMILY_LABELS.get(_challenge_family, _challenge_family)),
+		]
+		_draw_centered(
+			_body_font,
+			Vector2(panel.get_center().x, y),
+			settings,
+			header_size,
+			ColorTheme.gold()
+		)
+		y += 20.0 * ui_scale
+		if _challenge_family != GameModes.CLASSIC and _challenge_period_unix > 0:
+			_draw_centered(
+				_body_font,
+				Vector2(panel.get_center().x, y),
+				GameModes.period_label(_challenge_family, _challenge_period_unix),
+				header_size,
+				ColorTheme.muted()
+			)
+			y += 18.0 * ui_scale
+	elif _view_family != GameModes.CLASSIC:
 		var period := GameModes.period_label(_view_family, _view_period_unix)
 		_draw_choice(_period_prev_rect, "<", false, maxi(12, int(round(14 * ui_scale))))
 		_draw_choice(_period_next_rect, ">", false, maxi(12, int(round(14 * ui_scale))))
@@ -1292,6 +1413,13 @@ func _on_request_completed(
 
 
 func _board_title() -> String:
+	if is_challenge_active():
+		var title := _challenge_name.strip_edges().to_upper()
+		if title.is_empty():
+			title = "CHALLENGE"
+		if _view_mobile:
+			return "%s MOBILE" % title
+		return title
 	return GameModes.board_title(view_mode_id)
 
 
@@ -1404,11 +1532,17 @@ func _layout_leaderboard(vp: Vector2) -> Rect2:
 	var page_count := _leaderboard_page_count()
 	var pager_h := 40.0 * ui_scale if page_count > 1 else 0.0
 	var tab_h := maxf(32.0, 28.0 * ui_scale)
-	var period_h := tab_h if _view_family != GameModes.CLASSIC else 0.0
+	var challenge_view := is_challenge_active()
+	var tab_rows := 1.0 if challenge_view else 3.0
+	var period_h := 0.0
+	if challenge_view:
+		period_h = 36.0 * ui_scale
+	elif _view_family != GameModes.CLASSIC:
+		period_h = tab_h
 	var action_h := 56.0 if touch_ui else 0.0
 	var panel_h := minf(
 		100.0 * ui_scale
-		+ tab_h * 3.0
+		+ tab_h * tab_rows
 		+ period_h
 		+ action_h
 		+ header_h
@@ -1422,22 +1556,29 @@ func _layout_leaderboard(vp: Vector2) -> Rect2:
 		panel_y = maxf(8.0, panel_y)
 	var panel := Rect2((vp.x - panel_w) * 0.5, panel_y, panel_w, panel_h)
 	var gap := 8.0
-	var family_w := (panel.size.x - 24.0 - gap * 2.0) / 3.0
 	var tab_y := panel.position.y + 52.0 * ui_scale
-	_tab_classic_rect = Rect2(panel.position.x + 12.0, tab_y, family_w, tab_h)
-	_tab_daily_rect = Rect2(_tab_classic_rect.end.x + gap, tab_y, family_w, tab_h)
-	_tab_weekly_rect = Rect2(_tab_daily_rect.end.x + gap, tab_y, family_w, tab_h)
-	var diff_w := (panel.size.x - 24.0 - gap) * 0.5
-	var diff_y := _tab_classic_rect.end.y + 8.0
-	_tab_diff_classic_rect = Rect2(panel.position.x + 12.0, diff_y, diff_w, tab_h)
-	_tab_diff_hardcore_rect = Rect2(_tab_diff_classic_rect.end.x + gap, diff_y, diff_w, tab_h)
-	var platform_w := (panel.size.x - 24.0 - gap) * 0.5
-	var platform_y := _tab_diff_classic_rect.end.y + 8.0
-	_tab_desktop_rect = Rect2(panel.position.x + 12.0, platform_y, platform_w, tab_h)
-	_tab_mobile_rect = Rect2(_tab_desktop_rect.end.x + gap, platform_y, platform_w, tab_h)
+	_tab_classic_rect = Rect2()
+	_tab_daily_rect = Rect2()
+	_tab_weekly_rect = Rect2()
+	_tab_diff_classic_rect = Rect2()
+	_tab_diff_hardcore_rect = Rect2()
 	_period_prev_rect = Rect2()
 	_period_next_rect = Rect2()
-	if _view_family != GameModes.CLASSIC:
+	var platform_y := tab_y
+	if not challenge_view:
+		var family_w := (panel.size.x - 24.0 - gap * 2.0) / 3.0
+		_tab_classic_rect = Rect2(panel.position.x + 12.0, tab_y, family_w, tab_h)
+		_tab_daily_rect = Rect2(_tab_classic_rect.end.x + gap, tab_y, family_w, tab_h)
+		_tab_weekly_rect = Rect2(_tab_daily_rect.end.x + gap, tab_y, family_w, tab_h)
+		var diff_w := (panel.size.x - 24.0 - gap) * 0.5
+		var diff_y := _tab_classic_rect.end.y + 8.0
+		_tab_diff_classic_rect = Rect2(panel.position.x + 12.0, diff_y, diff_w, tab_h)
+		_tab_diff_hardcore_rect = Rect2(_tab_diff_classic_rect.end.x + gap, diff_y, diff_w, tab_h)
+		platform_y = _tab_diff_classic_rect.end.y + 8.0
+	var platform_w := (panel.size.x - 24.0 - gap) * 0.5
+	_tab_desktop_rect = Rect2(panel.position.x + 12.0, platform_y, platform_w, tab_h)
+	_tab_mobile_rect = Rect2(_tab_desktop_rect.end.x + gap, platform_y, platform_w, tab_h)
+	if not challenge_view and _view_family != GameModes.CLASSIC:
 		var period_y := _tab_desktop_rect.end.y + 8.0
 		var period_btn_w := maxf(36.0, 40.0 * ui_scale)
 		_period_prev_rect = Rect2(panel.position.x + 12.0, period_y, period_btn_w, tab_h)

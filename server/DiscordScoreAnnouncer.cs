@@ -38,6 +38,15 @@ public sealed class DiscordScoreAnnouncer
     {
         try
         {
+            if (ChallengeStore.IsChallengeModeId(submission.ModeId))
+            {
+                _logger.LogInformation(
+                    "Discord announcement skipped (private challenge): ModeId={ModeId}, PlayerName={PlayerName}",
+                    submission.ModeId,
+                    submission.PlayerName);
+                return;
+            }
+
             var webhookUrl = _configuration["Discord:WebhookUrl"];
             if (string.IsNullOrWhiteSpace(webhookUrl))
                 return;

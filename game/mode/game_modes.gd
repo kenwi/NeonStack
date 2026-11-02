@@ -105,19 +105,19 @@ static func shift_period_unix(game_mode: String, unix_utc: int, delta_periods: i
 	return unix_utc
 
 
-static func _core_board_id(board_id: String) -> String:
-	return board_id.trim_suffix("-mobile")
+static func _core_board_id(id: String) -> String:
+	return id.trim_suffix("-mobile")
 
 
-static func difficulty_from_board_id(board_id: String) -> String:
-	var core := _core_board_id(board_id)
+static func difficulty_from_board_id(id: String) -> String:
+	var core := _core_board_id(id)
 	if core == DIFFICULTY_HARDCORE or core.begins_with("%s-" % DIFFICULTY_HARDCORE):
 		return DIFFICULTY_HARDCORE
 	return DIFFICULTY_CLASSIC
 
 
-static func _family_core(board_id: String) -> String:
-	var core := _core_board_id(board_id)
+static func _family_core(id: String) -> String:
+	var core := _core_board_id(id)
 	if core == DIFFICULTY_HARDCORE:
 		return CLASSIC
 	if core.begins_with("%s-" % DIFFICULTY_HARDCORE):
@@ -125,8 +125,8 @@ static func _family_core(board_id: String) -> String:
 	return core
 
 
-static func family_from_board_id(board_id: String) -> String:
-	var core := _family_core(board_id)
+static func family_from_board_id(id: String) -> String:
+	var core := _family_core(id)
 	if core.begins_with("daily"):
 		return DAILY
 	if core.begins_with("weekly"):
@@ -134,13 +134,17 @@ static func family_from_board_id(board_id: String) -> String:
 	return CLASSIC
 
 
-static func is_mobile_board(board_id: String) -> bool:
-	return board_id.ends_with("-mobile")
+static func is_mobile_board(id: String) -> bool:
+	return id.ends_with("-mobile")
 
 
-static func period_unix_from_board_id(board_id: String) -> int:
-	var core := _family_core(board_id)
-	var family := family_from_board_id(board_id)
+static func is_challenge_board(id: String) -> bool:
+	return id.trim_suffix("-mobile").begins_with("c_")
+
+
+static func period_unix_from_board_id(id: String) -> int:
+	var core := _family_core(id)
+	var family := family_from_board_id(id)
 	if family == DAILY and core.length() > 6:
 		var date := core.substr(6) # after "daily-"
 		var parts := date.split("-")
@@ -179,10 +183,10 @@ static func unix_from_iso_week(year: int, week: int) -> int:
 	return monday_week1 + (maxi(1, week) - 1) * 7 * 86400
 
 
-static func board_title(board_id: String) -> String:
-	var family := family_from_board_id(board_id)
-	var mobile := is_mobile_board(board_id)
-	var hardcore := difficulty_from_board_id(board_id) == DIFFICULTY_HARDCORE
+static func board_title(id: String) -> String:
+	var family := family_from_board_id(id)
+	var mobile := is_mobile_board(id)
+	var hardcore := difficulty_from_board_id(id) == DIFFICULTY_HARDCORE
 	if family == CLASSIC:
 		if hardcore:
 			return "HARDCORE MOBILE HIGHSCORES" if mobile else "HARDCORE HIGHSCORES"

@@ -7,6 +7,7 @@
 [ext_resource type="Script" path="res://game/fx/juice.gd" id="5_juice"]
 [ext_resource type="Script" path="res://game/replay/recorder.gd" id="6_replay_rec"]
 [ext_resource type="Script" path="res://game/replay/player.gd" id="7_replay_play"]
+[ext_resource type="Script" path="res://game/challenge/challenge_client.gd" id="8_challenge"]
 
 [node name="Main" type="Node2D" unique_id=133890310]
 script = ExtResource("1_oa506")
@@ -16,6 +17,9 @@ script = ExtResource("2_music")
 
 [node name="Highscores" type="Node2D" parent="."]
 script = ExtResource("3_highscores")
+
+[node name="Challenges" type="Node2D" parent="."]
+script = ExtResource("8_challenge")
 
 [node name="Juice" type="Node2D" parent="."]
 script = ExtResource("5_juice")

@@ -1,6 +1,5 @@
 extends RefCounted
 
-## Public API via Cloudflare Tunnel (local Docker still reachable on :5090).
 const API_BASE_URL := "https://neonstack-highscores.m0b.tech"
 ## Legacy classic-difficulty board ids (unchanged). Period/hardcore boards live in GameModes.
 const MODE_ID := "classic"

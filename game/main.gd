@@ -234,6 +234,7 @@ var body_font: Font
 # The scene already owns these nodes. Preloading scripts from here cycles the load.
 @onready var music = $Music
 @onready var highscores = $Highscores
+@onready var challenges = $Challenges
 @onready var juice = $Juice
 @onready var touch = $TouchControls
 @onready var replay_recorder = $ReplayRecorder
@@ -244,7 +245,10 @@ var _touch_restart_rect := Rect2()
 var _mode_play_rect := Rect2()
 var _mode_help_rect := Rect2()
 var _mode_scores_rect := Rect2()
+var _mode_challenge_rect := Rect2()
+var _mode_leave_rect := Rect2()
 var _mode_options_rect := Rect2()
+var _challenge_period_unix := -1
 var _option_row_rects: Array = []
 ## Parallel to _option_row_rects: {kind, id}.
 var _settings_row_meta: Array = []
@@ -299,6 +303,11 @@ func _ready() -> void:
 	_load_leaderboard_greetings()
 	if replay_player != null:
 		replay_player.finished.connect(_on_replay_finished)
+	if challenges != null:
+		challenges.activated.connect(_on_challenge_activated)
+		challenges.cleared.connect(_on_challenge_cleared)
+		challenges.closed.connect(_on_challenge_overlay_closed)
+		challenges.start_requested.connect(_on_challenge_start_requested)
 	_load_help_seen()
 	_layout()
 	_new_game()
@@ -307,6 +316,8 @@ func _ready() -> void:
 	help_open = show_help
 	mode_select_open = not show_help
 	game_mode = ""
+	if challenges != null and challenges.is_active():
+		_on_challenge_activated(challenges.active_data())
 	if PlayDevice.is_touch_primary() and touch != null:
 		touch.suppress_play_taps(400)
 	queue_redraw()
@@ -366,6 +377,8 @@ func _apply_cell_metrics() -> void:
 	help_row_size = maxi(14, int(round(HELP_ROW_SIZE_BASE * ui_scale)))
 	if highscores != null:
 		highscores.set_ui_scale(ui_scale)
+	if challenges != null:
+		challenges.set_ui_scale(ui_scale)
 
 
 func _layout() -> void:
@@ -469,8 +482,11 @@ func _new_game(seed_override: int = -1) -> void:
 		run_seed = _make_run_seed()
 	bag_rng.seed = run_seed
 	if highscores != null and not replay_mode:
-		if not game_mode.is_empty() and highscores.has_method("set_game_mode"):
-			highscores.set_game_mode(game_mode, -1, difficulty)
+		if _challenge_active() and highscores.has_method("set_challenge_board"):
+			highscores.set_challenge_board(challenges.active_data())
+		elif not game_mode.is_empty() and highscores.has_method("set_game_mode"):
+			var period := _challenge_period_unix if _challenge_period_unix > 0 else -1
+			highscores.set_game_mode(game_mode, period, difficulty)
 		highscores.reset_run()
 		highscores.refresh_live_ranks()
 	if juice != null:
@@ -486,11 +502,112 @@ func _new_game(seed_override: int = -1) -> void:
 
 func _make_run_seed() -> int:
 	if game_mode == GameModes.DAILY or game_mode == GameModes.WEEKLY:
-		return GameModes.period_seed(game_mode)
+		var period := _challenge_period_unix if _challenge_period_unix > 0 else -1
+		return GameModes.period_seed(game_mode, period)
 	# Godot hash() often exceeds Int32.MaxValue; clamp so replay upload always accepts seed.
 	var mixed := int(Time.get_unix_time_from_system() * 1_000_000.0) ^ Time.get_ticks_usec()
 	var h := hash(mixed) & 0x7FFFFFFF
 	return h if h != 0 else 1
+
+
+func _challenge_active() -> bool:
+	return challenges != null and challenges.is_active()
+
+
+func _challenge_friends_unlocked() -> bool:
+	## Soft launch gate: only m0b sees create UI until challenges ship broadly.
+	if highscores == null:
+		return false
+	var name := str(highscores.player_name).strip_edges()
+	return not name.is_empty() and name.to_lower() == "m0b"
+
+
+func _on_challenge_activated(data: Dictionary) -> void:
+	var family := str(data.get("family", GameModes.CLASSIC)).to_lower()
+	var diff := str(data.get("difficulty", GameModes.DIFFICULTY_CLASSIC)).to_lower()
+	if not GameModes.is_valid_family(family):
+		family = GameModes.CLASSIC
+	if not GameModes.is_valid_difficulty(diff):
+		diff = GameModes.DIFFICULTY_CLASSIC
+	game_mode = family
+	difficulty = diff
+	var period = data.get("periodUnix", null)
+	if period != null and str(period) != "" and str(period) != "null" and int(period) > 0:
+		_challenge_period_unix = int(period)
+	else:
+		_challenge_period_unix = -1
+	var family_i := GameModes.FAMILIES.find(family)
+	if family_i >= 0:
+		_mode_pick_index = family_i
+	var diff_i := GameModes.DIFFICULTIES.find(diff)
+	if diff_i >= 0:
+		_diff_pick_index = diff_i
+	if highscores != null and highscores.has_method("set_challenge_board"):
+		highscores.set_challenge_board(data)
+	queue_redraw()
+
+
+func _on_challenge_cleared() -> void:
+	_challenge_period_unix = -1
+	if highscores != null and highscores.has_method("clear_challenge_board"):
+		highscores.clear_challenge_board()
+	game_mode = ""
+	queue_redraw()
+
+
+func _on_challenge_overlay_closed() -> void:
+	if not mode_select_open and not help_open and not score_open and not options_open:
+		_return_from_overlay_to_mode_select()
+	queue_redraw()
+
+
+func _on_challenge_start_requested() -> void:
+	mode_select_open = false
+	help_open = false
+	score_open = false
+	options_open = false
+	if highscores != null:
+		highscores.close_overlay()
+	if _challenge_active():
+		var data: Dictionary = challenges.active_data()
+		_confirm_game_mode(
+			str(data.get("family", GameModes.CLASSIC)),
+			str(data.get("difficulty", GameModes.DIFFICULTY_CLASSIC))
+		)
+	else:
+		_return_from_overlay_to_mode_select()
+	queue_redraw()
+
+
+func on_challenge_joined(_data: Dictionary) -> void:
+	## Deep-link / join: show the private board so friends see the waiting list.
+	mode_select_open = false
+	help_open = false
+	score_open = false
+	options_open = false
+	if highscores != null and highscores.has_method("open_challenge_leaderboard"):
+		highscores.open_challenge_leaderboard()
+	queue_redraw()
+
+
+func _open_challenge_from_mode_select() -> void:
+	if not _challenge_friends_unlocked():
+		return
+	mode_select_open = false
+	help_open = false
+	score_open = false
+	options_open = false
+	if highscores != null:
+		highscores.close_overlay()
+	if challenges != null:
+		challenges.open_create()
+	queue_redraw()
+
+
+func _leave_challenge_from_mode_select() -> void:
+	if challenges != null and challenges.is_active():
+		challenges.leave_challenge()
+	queue_redraw()
 
 
 func _awaiting_mode() -> bool:
@@ -504,8 +621,13 @@ func _overlay_blocks_play() -> bool:
 		or options_open
 		or mode_select_open
 		or _highscores_open()
+		or _challenge_overlay_open()
 		or paused
 	)
+
+
+func _challenge_overlay_open() -> bool:
+	return challenges != null and challenges.is_showing_overlay()
 
 
 func _open_mode_select_if_needed() -> void:
@@ -604,12 +726,15 @@ func _open_leaderboard_from_mode_select() -> void:
 	options_open = false
 	if highscores == null:
 		return
-	var family := _mode_family_at(_mode_pick_index)
-	var diff := _difficulty_at(_diff_pick_index)
-	if highscores.has_method("open_leaderboard_view"):
-		highscores.open_leaderboard_view(family, diff)
+	if _challenge_active() and highscores.has_method("open_challenge_leaderboard"):
+		highscores.open_challenge_leaderboard()
 	else:
-		highscores.open_leaderboard()
+		var family := _mode_family_at(_mode_pick_index)
+		var diff := _difficulty_at(_diff_pick_index)
+		if highscores.has_method("open_leaderboard_view"):
+			highscores.open_leaderboard_view(family, diff)
+		else:
+			highscores.open_leaderboard()
 	queue_redraw()
 
 
@@ -643,6 +768,10 @@ func _activate_mode_select_primary() -> void:
 
 
 func _confirm_game_mode(mode: String, diff: String = "") -> void:
+	if _challenge_active():
+		var data: Dictionary = challenges.active_data()
+		mode = str(data.get("family", mode))
+		diff = str(data.get("difficulty", diff))
 	if not GameModes.is_valid_family(mode):
 		return
 	if diff.is_empty():
@@ -656,8 +785,12 @@ func _confirm_game_mode(mode: String, diff: String = "") -> void:
 	help_open = false
 	score_open = false
 	options_open = false
-	if highscores != null and highscores.has_method("set_game_mode"):
-		highscores.set_game_mode(game_mode, -1, difficulty)
+	if highscores != null:
+		if _challenge_active() and highscores.has_method("set_challenge_board"):
+			highscores.set_challenge_board(challenges.active_data())
+		elif highscores.has_method("set_game_mode"):
+			var period := _challenge_period_unix if _challenge_period_unix > 0 else -1
+			highscores.set_game_mode(game_mode, period, difficulty)
 	_new_game()
 	_sync_hold_flags_from_input()
 	if touch != null:
@@ -987,6 +1120,8 @@ func cycle_theme() -> void:
 	_sync_starfield()
 	if highscores != null and highscores.has_method("apply_color_theme"):
 		highscores.apply_color_theme()
+	if challenges != null and challenges.has_method("apply_color_theme"):
+		challenges.apply_color_theme()
 	if music != null and music.has_method("show_status"):
 		music.show_status("Theme %s" % theme_name)
 	if touch != null:
@@ -995,6 +1130,8 @@ func cycle_theme() -> void:
 		juice.queue_redraw()
 	if highscores != null:
 		highscores.queue_redraw()
+	if challenges != null:
+		challenges.queue_redraw()
 	queue_redraw()
 
 
@@ -1106,6 +1243,7 @@ func _process(delta: float) -> void:
 		or options_open
 		or mode_select_open
 		or _highscores_open()
+		or _challenge_overlay_open()
 		or _awaiting_mode()
 	):
 		queue_redraw()
@@ -1135,6 +1273,7 @@ func _process(delta: float) -> void:
 			or options_open
 			or mode_select_open
 			or _highscores_open()
+			or _challenge_overlay_open()
 		):
 			break
 	queue_redraw()
@@ -1259,6 +1398,7 @@ func _can_accept_play_action() -> bool:
 		and not _awaiting_mode()
 		and clear_timer <= 0.0
 		and not _highscores_open()
+		and not _challenge_overlay_open()
 	)
 
 
@@ -1295,6 +1435,18 @@ func start_replay_from_data(data: Dictionary) -> bool:
 
 ## Apply board id so DAS / lock-reset rules match the recorded highscore board.
 func configure_run_from_board_id(board_id: String) -> void:
+	if GameModes.is_challenge_board(board_id):
+		if _challenge_active():
+			var data: Dictionary = challenges.active_data()
+			var challenge_family := str(data.get("family", GameModes.CLASSIC)).to_lower()
+			var challenge_diff := str(data.get("difficulty", GameModes.DIFFICULTY_CLASSIC)).to_lower()
+			if GameModes.is_valid_family(challenge_family):
+				game_mode = challenge_family
+			if GameModes.is_valid_difficulty(challenge_diff):
+				difficulty = challenge_diff
+			if highscores != null and highscores.has_method("set_challenge_board"):
+				highscores.set_challenge_board(data)
+		return
 	var family := GameModes.family_from_board_id(board_id)
 	var diff := GameModes.difficulty_from_board_id(board_id)
 	if GameModes.is_valid_family(family):
@@ -1468,15 +1620,15 @@ func _layout_replay_controls(vp: Vector2) -> void:
 	)
 	# Shrink slightly on narrow viewports so the bar still fits.
 	if row_w > vp.x - 8.0:
-		var scale := (vp.x - 8.0) / row_w
-		close_w *= scale
-		speed_w *= scale
-		scrub_large_w *= scale
-		scrub_w *= scale
-		scrub_small_w *= scale
-		clock_w *= scale
-		gap *= scale
-		pad_x *= scale
+		var fit_scale := (vp.x - 8.0) / row_w
+		close_w *= fit_scale
+		speed_w *= fit_scale
+		scrub_large_w *= fit_scale
+		scrub_w *= fit_scale
+		scrub_small_w *= fit_scale
+		clock_w *= fit_scale
+		gap *= fit_scale
+		pad_x *= fit_scale
 		row_w = vp.x - 8.0
 	var bottom_inset := 0.0
 	if touch != null and touch.reserves_layout():
@@ -1654,20 +1806,22 @@ func _handle_touch_overlay(event: InputEvent) -> bool:
 
 func _handle_mode_select_pointer(point: Vector2) -> bool:
 	_layout_mode_select(get_viewport_rect().size)
-	for i in _diff_choice_rects.size():
-		var diff_rect: Rect2 = _diff_choice_rects[i]
-		if diff_rect.has_point(point):
-			_diff_pick_index = i
-			_mode_focus_row = 0
-			queue_redraw()
-			return true
-	for i in _mode_choice_rects.size():
-		var rect: Rect2 = _mode_choice_rects[i]
-		if rect.has_point(point):
-			_mode_pick_index = i
-			_mode_focus_row = 1
-			queue_redraw()
-			return true
+	var locked := _challenge_active()
+	if not locked:
+		for i in _diff_choice_rects.size():
+			var diff_rect: Rect2 = _diff_choice_rects[i]
+			if diff_rect.has_point(point):
+				_diff_pick_index = i
+				_mode_focus_row = 0
+				queue_redraw()
+				return true
+		for i in _mode_choice_rects.size():
+			var rect: Rect2 = _mode_choice_rects[i]
+			if rect.has_point(point):
+				_mode_pick_index = i
+				_mode_focus_row = 1
+				queue_redraw()
+				return true
 	if _mode_play_rect.size.x > 0.0 and _mode_play_rect.has_point(point):
 		_activate_mode_select_primary()
 		return true
@@ -1676,6 +1830,12 @@ func _handle_mode_select_pointer(point: Vector2) -> bool:
 		return true
 	if _mode_scores_rect.size.x > 0.0 and _mode_scores_rect.has_point(point):
 		_open_leaderboard_from_mode_select()
+		return true
+	if _mode_challenge_rect.size.x > 0.0 and _mode_challenge_rect.has_point(point):
+		_open_challenge_from_mode_select()
+		return true
+	if _mode_leave_rect.size.x > 0.0 and _mode_leave_rect.has_point(point):
+		_leave_challenge_from_mode_select()
 		return true
 	if _mode_options_rect.size.x > 0.0 and _mode_options_rect.has_point(point):
 		_open_options_from_mode_select()
@@ -1693,6 +1853,27 @@ func _handle_mode_select_keys(event: InputEvent) -> bool:
 			_close_mode_select_to_game()
 		else:
 			queue_redraw()
+		return true
+	if _key_pressed(event, KEY_C) and _challenge_friends_unlocked():
+		_open_challenge_from_mode_select()
+		return true
+	if _challenge_active():
+		if (
+			_key_pressed(event, KEY_ENTER)
+			or _key_pressed(event, KEY_KP_ENTER)
+			or event.is_action_pressed("ui_accept")
+		):
+			_activate_mode_select_primary()
+			return true
+		if Keybinds.matches_pressed(event, Keybinds.HELP):
+			_open_help_from_mode_select()
+			return true
+		if Keybinds.matches_pressed(event, Keybinds.HIGHSCORES):
+			_open_leaderboard_from_mode_select()
+			return true
+		if _key_pressed(event, KEY_O):
+			_open_options_from_mode_select()
+			return true
 		return true
 	if _key_pressed(event, KEY_TAB):
 		_mode_focus_row = 1 - _mode_focus_row
@@ -1766,6 +1947,10 @@ func _input(event: InputEvent) -> void:
 	# Unhandled events stay unhandled so the touch name field can take them.
 	if highscores != null and highscores.is_capturing_input():
 		if highscores.handle_input(event):
+			get_viewport().set_input_as_handled()
+		return
+	if challenges != null and challenges.is_capturing_input():
+		if challenges.handle_input(event):
 			get_viewport().set_input_as_handled()
 		return
 	if _handle_touch_overlay(event):
@@ -1909,6 +2094,8 @@ func _input(event: InputEvent) -> void:
 			else:
 				highscores.close_overlay()
 				_return_from_overlay_to_mode_select()
+		elif _challenge_overlay_open() and challenges != null:
+			challenges.close_overlay()
 		elif DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_FULLSCREEN \
 			or DisplayServer.window_get_mode() == DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN:
 			DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
@@ -1944,7 +2131,14 @@ func _input(event: InputEvent) -> void:
 		queue_redraw()
 		get_viewport().set_input_as_handled()
 		return
-	if help_open or score_open or options_open or mode_select_open or _highscores_open():
+	if (
+		help_open
+		or score_open
+		or options_open
+		or mode_select_open
+		or _highscores_open()
+		or _challenge_overlay_open()
+	):
 		get_viewport().set_input_as_handled()
 		return
 	if paused:
@@ -2642,7 +2836,10 @@ func _layout_mode_select(vp: Vector2) -> Dictionary:
 	_mode_play_rect = Rect2()
 	_mode_help_rect = Rect2()
 	_mode_scores_rect = Rect2()
+	_mode_challenge_rect = Rect2()
+	_mode_leave_rect = Rect2()
 	_mode_options_rect = Rect2()
+	var challenge_on := _challenge_active()
 	var title_size_local := help_title_size
 	var row_size := help_row_size
 	var section_size := maxi(11, int(round(float(hint_size) * 0.9)))
@@ -2654,29 +2851,41 @@ func _layout_mode_select(vp: Vector2) -> Dictionary:
 	var choice_h := maxf(44.0, 48.0 * ui_scale)
 	var diff_h := maxf(40.0, 44.0 * ui_scale)
 	var play_h := 48.0
-	## Secondary row (Help / Scores / Settings) sits above the primary CTA.
+	## Secondary row (Help / Scores / Settings), then full-width challenge CTA above START.
 	var link_h := maxf(38.0, 42.0 * ui_scale)
 	var link_gap := 8.0 * ui_scale
 	var link_count := 3
+	var challenge_h := (
+		0.0
+		if challenge_on or not _challenge_friends_unlocked()
+		else maxf(40.0, 44.0 * ui_scale)
+	)
+	var leave_h := maxf(36.0, 38.0 * ui_scale) if challenge_on else 0.0
 	var title_h := title_font.get_ascent(title_size_local) + title_font.get_descent(title_size_local)
 	var section_h := body_font.get_ascent(section_size) + body_font.get_descent(section_size)
 	var line_h := body_font.get_ascent(hint_size_local) + body_font.get_descent(hint_size_local) + 4.0 * ui_scale
-	var footer_h := body_font.get_ascent(hint_size) + body_font.get_descent(hint_size) + 8.0 * ui_scale
-	var panel_w := minf(440.0 * ui_scale, vp.x - 16.0)
+	var footer_h := 0.0
+	var panel_w := minf(460.0 * ui_scale, vp.x - 16.0)
 	var hint_max_w := panel_w - pad_x * 2.0
-	var hint_lines := _wrap_text_lines(
-		GameModes.hint_for_selection(
-			_mode_family_at(_mode_pick_index),
-			_difficulty_at(_diff_pick_index)
-		),
-		body_font,
-		hint_size_local,
-		hint_max_w
+	var hint_text := GameModes.hint_for_selection(
+		_mode_family_at(_mode_pick_index),
+		_difficulty_at(_diff_pick_index)
 	)
+	if challenge_on:
+		var cdata: Dictionary = challenges.active_data()
+		hint_text = "Private board · %s · %s" % [
+			str(GameModes.DIFFICULTY_LABELS.get(str(cdata.get("difficulty", "")), "")),
+			str(GameModes.FAMILY_LABELS.get(str(cdata.get("family", "")), "")),
+		]
+	var hint_lines := _wrap_text_lines(hint_text, body_font, hint_size_local, hint_max_w)
 	var hint_block_h := line_h * float(maxi(1, hint_lines.size()))
+	var banner_h := 0.0
+	if challenge_on:
+		banner_h = line_h + 8.0 * ui_scale + leave_h + 10.0 * ui_scale
 	var panel_h := (
 		pad_top
 		+ title_h
+		+ banner_h
 		+ 12.0 * ui_scale
 		+ section_h
 		+ 6.0 * ui_scale
@@ -2688,6 +2897,7 @@ func _layout_mode_select(vp: Vector2) -> Dictionary:
 		+ hint_block_h
 		+ 12.0 * ui_scale
 		+ link_h
+		+ (8.0 * ui_scale + challenge_h if challenge_h > 0.0 else 0.0)
 		+ 10.0 * ui_scale
 		+ play_h
 		+ footer_h
@@ -2700,6 +2910,15 @@ func _layout_mode_select(vp: Vector2) -> Dictionary:
 	panel.position.y = clampf(panel.position.y, 8.0, maxf(8.0, vp.y - panel.size.y - 8.0))
 	var choice_w := panel.size.x - pad_x * 2.0
 	var y := panel.position.y + pad_top + title_h + 14.0 * ui_scale
+	var banner_y := y
+	if challenge_on:
+		_mode_leave_rect = Rect2(
+			panel.position.x + pad_x,
+			banner_y + body_font.get_descent(hint_size) + 8.0 * ui_scale,
+			choice_w,
+			leave_h
+		)
+		y += banner_h
 	var diff_section_y := y + body_font.get_ascent(section_size)
 	y += section_h + 6.0 * ui_scale
 	var diff_gap := 8.0 * ui_scale
@@ -2718,7 +2937,17 @@ func _layout_mode_select(vp: Vector2) -> Dictionary:
 	var hint_block_bottom := hint_y + float(maxi(0, hint_lines.size() - 1)) * line_h + body_font.get_descent(hint_size_local)
 	var button_w := minf(180.0, panel.size.x - 24.0)
 	var link_y := hint_block_bottom + 12.0 * ui_scale
-	var link_max_y := panel.end.y - pad_bottom - link_h - 10.0 * ui_scale - play_h - footer_h
+	var challenge_gap := 8.0 * ui_scale if challenge_h > 0.0 else 0.0
+	var link_max_y := (
+		panel.end.y
+		- pad_bottom
+		- challenge_h
+		- challenge_gap
+		- link_h
+		- 10.0 * ui_scale
+		- play_h
+		- footer_h
+	)
 	link_y = minf(link_y, link_max_y)
 	var link_row_w := choice_w
 	var link_w := (link_row_w - link_gap * float(link_count - 1)) / float(link_count)
@@ -2731,9 +2960,21 @@ func _layout_mode_select(vp: Vector2) -> Dictionary:
 		link_w,
 		link_h
 	)
+	if challenge_h > 0.0:
+		_mode_challenge_rect = Rect2(
+			panel.position.x + pad_x,
+			_mode_help_rect.end.y + challenge_gap,
+			choice_w,
+			challenge_h
+		)
+	var play_y := (
+		_mode_challenge_rect.end.y + 10.0 * ui_scale
+		if challenge_h > 0.0
+		else _mode_help_rect.end.y + 10.0 * ui_scale
+	)
 	_mode_play_rect = Rect2(
 		panel.position.x + (panel.size.x - button_w) * 0.5,
-		_mode_help_rect.end.y + 10.0 * ui_scale,
+		play_y,
 		button_w,
 		play_h
 	)
@@ -2746,6 +2987,8 @@ func _layout_mode_select(vp: Vector2) -> Dictionary:
 		"section_size": section_size,
 		"mode_section_y": mode_section_y,
 		"diff_section_y": diff_section_y,
+		"banner_y": banner_y,
+		"challenge_on": challenge_on,
 		"hint_size": hint_size_local,
 		"hint_y": hint_y,
 		"hint_line_h": line_h,
@@ -2769,11 +3012,12 @@ func _draw_mode_select(vp: Vector2) -> void:
 	var hint_y: float = float(layout["hint_y"])
 	var hint_line_h: float = float(layout["hint_line_h"])
 	var hint_lines: PackedStringArray = layout["hint_lines"]
-	var footer_h: float = float(layout["footer_h"])
-	var pad_bottom: float = float(layout["pad_bottom"])
 	draw_rect(panel, ColorTheme.bg_panel(0.96), true, -1.0, true)
 	draw_rect(panel, ColorTheme.accent(0.45), false, 1.5, true)
+	var challenge_on: bool = bool(layout.get("challenge_on", false))
 	var title := "GAME MODE"
+	if challenge_on:
+		title = str(challenges.active_data().get("name", "CHALLENGE")).to_upper()
 	var title_w := title_font.get_string_size(title, HORIZONTAL_ALIGNMENT_LEFT, -1, title_size_local).x
 	draw_string(
 		title_font,
@@ -2787,6 +3031,23 @@ func _draw_mode_select(vp: Vector2) -> void:
 		title_size_local,
 		ColorTheme.accent()
 	)
+	if challenge_on:
+		var banner := "Private challenge · locked settings"
+		var banner_w := body_font.get_string_size(banner, HORIZONTAL_ALIGNMENT_LEFT, -1, hint_size).x
+		draw_string(
+			body_font,
+			Vector2(
+				panel.position.x + (panel.size.x - banner_w) * 0.5,
+				float(layout.get("banner_y", 0.0))
+			),
+			banner,
+			HORIZONTAL_ALIGNMENT_LEFT,
+			-1,
+			hint_size,
+			ColorTheme.gold()
+		)
+		if _mode_leave_rect.size.x > 0.0:
+			_draw_overlay_button(_mode_leave_rect, "LEAVE CHALLENGE")
 	var diff_section := "DIFFICULTY"
 	var diff_section_w := body_font.get_string_size(diff_section, HORIZONTAL_ALIGNMENT_LEFT, -1, section_size).x
 	draw_string(
@@ -2802,7 +3063,7 @@ func _draw_mode_select(vp: Vector2) -> void:
 		var diff: String = GameModes.DIFFICULTIES[i]
 		var diff_rect: Rect2 = _diff_choice_rects[i]
 		var diff_selected := i == _diff_pick_index
-		var diff_focused := diff_selected and _mode_focus_row == 0
+		var diff_focused := diff_selected and _mode_focus_row == 0 and not challenge_on
 		var diff_fill := ColorTheme.bg_elevated(0.96) if diff_selected else ColorTheme.bg_deep(0.94)
 		var diff_border := ColorTheme.accent(0.95) if diff_focused else (
 			ColorTheme.accent(0.7) if diff_selected else ColorTheme.accent(0.4)
@@ -2822,7 +3083,7 @@ func _draw_mode_select(vp: Vector2) -> void:
 			HORIZONTAL_ALIGNMENT_LEFT,
 			-1,
 			row_size,
-			ColorTheme.text()
+			ColorTheme.muted() if challenge_on and not diff_selected else ColorTheme.text()
 		)
 	var mode_section := "MODE"
 	var mode_section_w := body_font.get_string_size(mode_section, HORIZONTAL_ALIGNMENT_LEFT, -1, section_size).x
@@ -2839,7 +3100,7 @@ func _draw_mode_select(vp: Vector2) -> void:
 		var family: String = GameModes.FAMILIES[i]
 		var rect: Rect2 = _mode_choice_rects[i]
 		var selected := i == _mode_pick_index
-		var focused := selected and _mode_focus_row == 1
+		var focused := selected and _mode_focus_row == 1 and not challenge_on
 		var fill := ColorTheme.bg_elevated(0.96) if selected else ColorTheme.bg_deep(0.94)
 		var border := ColorTheme.accent(0.95) if focused else (
 			ColorTheme.accent(0.7) if selected else ColorTheme.accent(0.4)
@@ -2856,7 +3117,7 @@ func _draw_mode_select(vp: Vector2) -> void:
 			HORIZONTAL_ALIGNMENT_LEFT,
 			-1,
 			row_size,
-			ColorTheme.text()
+			ColorTheme.muted() if challenge_on and not selected else ColorTheme.text()
 		)
 	for i in hint_lines.size():
 		var line := str(hint_lines[i])
@@ -2876,28 +3137,10 @@ func _draw_mode_select(vp: Vector2) -> void:
 		_draw_overlay_button(_mode_scores_rect, "SCORES")
 	if _mode_options_rect.size.x > 0.0:
 		_draw_overlay_button(_mode_options_rect, "SETTINGS")
+	if _mode_challenge_rect.size.x > 0.0:
+		_draw_overlay_button(_mode_challenge_rect, "CHALLENGE YOUR FRIENDS")
 	if _mode_play_rect.size.x > 0.0:
 		_draw_overlay_button(_mode_play_rect, _mode_select_primary_label())
-	if footer_h > 0.0:
-		var footer := ""
-		if PlayDevice.is_touch_primary():
-			footer = "Esc resume" if _menu_can_resume else ""
-		elif _menu_can_resume:
-			footer = "H help  L scores  O settings  Esc resume  Enter"
-		else:
-			footer = "H help  L scores  O settings  1-3 mode  Enter start"
-		if not footer.is_empty():
-			var footer_w := body_font.get_string_size(footer, HORIZONTAL_ALIGNMENT_LEFT, -1, hint_size).x
-			var footer_y := panel.end.y - pad_bottom + body_font.get_ascent(hint_size) - footer_h + 4.0 * ui_scale
-			draw_string(
-				body_font,
-				Vector2(panel.position.x + (panel.size.x - footer_w) * 0.5, footer_y),
-				footer,
-				HORIZONTAL_ALIGNMENT_LEFT,
-				-1,
-				hint_size,
-				ColorTheme.muted()
-			)
 
 
 func _settings_build_rows() -> Array:
@@ -2941,6 +3184,8 @@ func _reset_all_settings() -> void:
 	ColorTheme.reset_to_default()
 	if highscores != null and highscores.has_method("apply_color_theme"):
 		highscores.apply_color_theme()
+	if challenges != null and challenges.has_method("apply_color_theme"):
+		challenges.apply_color_theme()
 	leaderboard_greetings = true
 	_save_leaderboard_greetings()
 	if music != null and music.has_method("reset_audio_prefs"):
@@ -3033,8 +3278,8 @@ func _layout_options(vp: Vector2) -> Dictionary:
 	for i in rows.size():
 		var row_h: float = float(row_heights[i])
 		var rect := Rect2(panel.position.x + pad_x, y, row_w, row_h)
-		var visible := rect.end.y > content_top and rect.position.y < content_bottom
-		if visible:
+		var row_visible := rect.end.y > content_top and rect.position.y < content_bottom
+		if row_visible:
 			var clipped := Rect2(
 				rect.position.x,
 				maxf(rect.position.y, content_top),

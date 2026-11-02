@@ -8,12 +8,14 @@ Run the Neon Stack highscores API in Docker with persistent data on the host and
 |------|---------|
 | `data/appsettings.json` | Runtime config (CORS origins, log levels). Mounted at `/data/appsettings.json` in the container. |
 | `data/highscores.json` | Leaderboard storage. Created automatically on first score if missing. |
+| `data/challenges.json` | Private challenge board registry (name + locked settings). |
 | `.env` | Local secrets and ports (`TUNNEL_TOKEN`, `HIGHSCORES_PORT`, `TZ`). |
 
-Optional starter score file:
+Optional starter files:
 
 ```bash
 cp data/highscores.json.example data/highscores.json
+cp data/challenges.json.example data/challenges.json
 ```
 
 ## Quick start (local only)
@@ -33,6 +35,10 @@ API:
 - `GET  http://localhost:5090/api/scores/daily-2026-10-31?top=10`
 - `GET  http://localhost:5090/api/scores/hardcore-weekly-2026-W44-mobile?top=10`
 - `POST http://localhost:5090/api/scores`
+- `POST http://localhost:5090/api/challenges` (create private board)
+- `GET  http://localhost:5090/api/challenges/{id}`
+
+Private challenge score boards use mode ids `c_{token}` / `c_{token}-mobile`. Metadata (custom name, family, difficulty, frozen period) lives in `challenges.json`; scores stay in `highscores.json`. Discord announcements skip `c_*` boards.
 
 Game modes (classic difficulty keeps the legacy ids):
 

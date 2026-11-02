@@ -21,6 +21,7 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 });
 
 builder.Services.AddSingleton<JsonFileScoreStore>();
+builder.Services.AddSingleton<ChallengeStore>();
 builder.Services.AddSingleton<SubmissionRejectionTracker>();
 builder.Services.AddHttpClient<DiscordScoreAnnouncer>();
 builder.Services.AddCors(options =>
@@ -48,10 +49,17 @@ app.UseMiddleware<RequestLoggingMiddleware>();
 
 var startupLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Tetris.Highscores.Server");
 var scoreFilePath = app.Configuration["Highscores:FilePath"] ?? "highscores.json";
+var challengesFilePath = app.Configuration["Highscores:ChallengesFilePath"];
+if (string.IsNullOrWhiteSpace(challengesFilePath))
+{
+    var scoreDir = Path.GetDirectoryName(Path.GetFullPath(scoreFilePath)) ?? ".";
+    challengesFilePath = Path.Combine(scoreDir, "challenges.json");
+}
 var logFilePath = app.Configuration["Logging:File:Path"];
 startupLogger.LogInformation(
-    "Highscores server starting. ScoreFile={ScoreFile}, LogFile={LogFile}, CorsOrigins={CorsOrigins}",
+    "Highscores server starting. ScoreFile={ScoreFile}, ChallengesFile={ChallengesFile}, LogFile={LogFile}, CorsOrigins={CorsOrigins}",
     Path.GetFullPath(scoreFilePath),
+    Path.GetFullPath(challengesFilePath),
     string.IsNullOrWhiteSpace(logFilePath) ? "(disabled)" : Path.GetFullPath(logFilePath),
     string.Join(", ", app.Configuration.GetSection("Cors:Origins").Get<string[]>() ?? []));
 
@@ -65,6 +73,71 @@ if (File.Exists(dataConfigPath))
 if (!app.Environment.IsDevelopment())
     app.UseHttpsRedirection();
 app.UseCors();
+
+app.MapPost("/api/challenges", async (
+    CreateChallengeRequest request,
+    ChallengeStore challenges,
+    HttpContext httpContext,
+    ILogger<Program> logger,
+    CancellationToken cancellationToken) =>
+{
+    var clientIp = httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+    logger.LogInformation(
+        "POST /api/challenges request: ClientIp={ClientIp}, Name={Name}, Family={Family}, Difficulty={Difficulty}",
+        clientIp,
+        request.Name,
+        request.Family,
+        request.Difficulty);
+
+    var (challenge, error) = await challenges.TryCreateAsync(request, cancellationToken);
+    if (challenge == null)
+    {
+        logger.LogWarning(
+            "POST /api/challenges rejected: ClientIp={ClientIp}, Error={Error}",
+            clientIp,
+            error);
+        return Results.BadRequest(new { error });
+    }
+
+    logger.LogInformation(
+        "POST /api/challenges succeeded: ClientIp={ClientIp}, Id={Id}, Family={Family}, Difficulty={Difficulty}",
+        clientIp,
+        challenge.Id,
+        challenge.Family,
+        challenge.Difficulty);
+    return Results.Ok(challenge);
+});
+
+app.MapGet("/api/challenges/{id}", async (
+    string id,
+    ChallengeStore challenges,
+    HttpContext httpContext,
+    ILogger<Program> logger,
+    CancellationToken cancellationToken) =>
+{
+    var clientIp = httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+    logger.LogInformation(
+        "GET /api/challenges/{Id} request: ClientIp={ClientIp}, RawId={RawId}",
+        id,
+        clientIp,
+        id);
+
+    var challenge = await challenges.TryGetAsync(id, cancellationToken);
+    if (challenge == null)
+    {
+        logger.LogWarning(
+            "GET /api/challenges not found: ClientIp={ClientIp}, RawId={RawId}",
+            clientIp,
+            id);
+        return Results.NotFound(new { error = "Challenge not found." });
+    }
+
+    logger.LogInformation(
+        "GET /api/challenges/{Id} succeeded: ClientIp={ClientIp}",
+        challenge.Id,
+        clientIp);
+    return Results.Ok(challenge);
+});
 
 app.MapPost("/api/scores", async (
     ScoreSubmission submission,
