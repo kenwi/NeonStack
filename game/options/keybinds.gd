@@ -121,10 +121,9 @@ static func ensure_loaded() -> void:
 	for id in ACTION_ORDER:
 		if not cfg.has_section_key(CONFIG_SECTION, id):
 			continue
+		# Empty value means intentionally unbound - do not fall back to defaults.
 		var raw := str(cfg.get_value(CONFIG_SECTION, id, ""))
-		var parsed := _parse_keys(raw)
-		if not parsed.is_empty():
-			_binds[id] = parsed
+		_binds[id] = _parse_keys(raw)
 
 
 static func reset_to_defaults() -> void:
