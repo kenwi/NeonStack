@@ -2,6 +2,8 @@ extends RefCounted
 
 ## Customizable keyboard binds. Persisted to user:// (IndexedDB on web exports).
 
+const PlayDevice = preload("res://game/platform/play_device.gd")
+
 const CONFIG_PATH := "user://keybinds.cfg"
 const CONFIG_SECTION := "binds"
 
@@ -133,10 +135,24 @@ static func reset_to_defaults() -> void:
 	_save()
 
 
+## Quit only makes sense on native desktop - web/mobile users close the tab or app.
+static func quit_supported() -> bool:
+	return not OS.has_feature("web") and not PlayDevice.is_touch_primary()
+
+
+static func visible_action_ids() -> Array[String]:
+	var ids: Array[String] = []
+	for id in ACTION_ORDER:
+		if id == QUIT and not quit_supported():
+			continue
+		ids.append(id)
+	return ids
+
+
 static func entries() -> Array:
 	ensure_loaded()
 	var rows: Array = []
-	for id in ACTION_ORDER:
+	for id in visible_action_ids():
 		var meta: Dictionary = META.get(id, {})
 		rows.append({
 			"id": id,
@@ -166,7 +182,7 @@ static func keys_label(id: String) -> String:
 static func help_rows() -> Array:
 	ensure_loaded()
 	var rows: Array = []
-	for id in ACTION_ORDER:
+	for id in visible_action_ids():
 		var meta: Dictionary = META.get(id, {})
 		rows.append([keys_label(id), str(meta.get("title", id))])
 	return rows

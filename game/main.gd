@@ -1868,7 +1868,7 @@ func _input(event: InputEvent) -> void:
 		_toggle_leaderboard_greetings()
 		get_viewport().set_input_as_handled()
 		return
-	if Keybinds.matches_pressed(event, Keybinds.QUIT):
+	if Keybinds.quit_supported() and Keybinds.matches_pressed(event, Keybinds.QUIT):
 		_quit_game()
 		get_viewport().set_input_as_handled()
 		return
@@ -3376,7 +3376,9 @@ func _draw_overlays(vp: Vector2) -> void:
 	if paused and not replay_mode:
 		draw_rect(Rect2(Vector2.ZERO, vp), Color(0, 0, 0, 0.55))
 		_draw_centered_label(center, "PAUSED", title_font, 42, ColorTheme.accent(), -24.0)
-		var paused_hint := "Tap anywhere to resume" if PlayDevice.is_touch_primary() else "Any key resume    Esc / Q quit"
+		var paused_hint := "Tap anywhere to resume" if PlayDevice.is_touch_primary() else (
+			"Any key resume    Esc menu" if not Keybinds.quit_supported() else "Any key resume    Esc / Q quit"
+		)
 		_draw_centered_label(center, paused_hint, body_font, 20, ColorTheme.text(), 24.0)
 	if game_over and not replay_mode:
 		draw_rect(Rect2(Vector2.ZERO, vp), Color(0, 0, 0, 0.62))
@@ -3386,6 +3388,11 @@ func _draw_overlays(vp: Vector2) -> void:
 			if _touch_restart_rect.size.x > 0.0:
 				_draw_overlay_button(_touch_restart_rect, "RESTART")
 			else:
-				_draw_centered_label(center, "R / Space / Enter restart    Esc / Q quit", body_font, 20, ColorTheme.text(), 18.0)
+				var over_hint := (
+					"R / Space / Enter restart    Esc menu"
+					if not Keybinds.quit_supported()
+					else "R / Space / Enter restart    Esc / Q quit"
+				)
+				_draw_centered_label(center, over_hint, body_font, 20, ColorTheme.text(), 18.0)
 	elif game_over and replay_mode:
 		_draw_stack_full_banner(center, 0.0)
