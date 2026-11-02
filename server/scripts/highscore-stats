@@ -3,13 +3,13 @@
 
 Examples:
   highscore-stats
-  highscore-stats m0b
+  highscore-stats <user>
   highscore-stats -n 50
-  highscore-stats Dyret -n 10
+  highscore-stats <user> -n 10
   highscore-stats --mode classic-mobile
-  highscore-stats m0b --plot
-  highscore-stats m0b --plot --smooth
-  highscore-stats STRENGERESTRAFF --plot --theme dark --save ~/strenger.png
+  highscore-stats <user> --plot
+  highscore-stats <user> --plot --smooth
+  highscore-stats <user> --plot --theme dark --save ~/plot.png
 """
 
 from __future__ import annotations
