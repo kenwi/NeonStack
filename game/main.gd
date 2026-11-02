@@ -1292,8 +1292,8 @@ func _handle_hard_drop_hint_input(event: InputEvent) -> bool:
 
 
 func _layout_hard_drop_hint(vp: Vector2) -> void:
-	var panel_w := minf(460.0 * ui_scale, vp.x - 24.0)
-	var panel_h := minf(280.0 * ui_scale, vp.y - 24.0)
+	var panel_w := minf(520.0 * ui_scale, vp.x - 24.0)
+	var panel_h := minf(340.0 * ui_scale, vp.y - 24.0)
 	var center := _board_center()
 	var panel := Rect2(center - Vector2(panel_w, panel_h) * 0.5, Vector2(panel_w, panel_h))
 	var btn_w := minf(220.0 * ui_scale, panel.size.x - 48.0 * ui_scale)
@@ -1310,13 +1310,13 @@ func _draw_hard_drop_hint(vp: Vector2) -> void:
 	_layout_hard_drop_hint(vp)
 	var center := _board_center()
 	draw_rect(Rect2(Vector2.ZERO, vp), Color(0, 0, 0, 0.62))
-	var panel_w := minf(460.0 * ui_scale, vp.x - 24.0)
-	var panel_h := minf(280.0 * ui_scale, vp.y - 24.0)
+	var panel_w := minf(520.0 * ui_scale, vp.x - 24.0)
+	var panel_h := minf(340.0 * ui_scale, vp.y - 24.0)
 	var panel := Rect2(center - Vector2(panel_w, panel_h) * 0.5, Vector2(panel_w, panel_h))
 	draw_rect(panel, ColorTheme.bg_panel(0.96), true, -1.0, true)
 	draw_rect(panel, ColorTheme.accent(0.55), false, 1.5, true)
 	var title_size_local := maxi(20, int(round(28 * ui_scale)))
-	var body_size := maxi(14, int(round(17 * ui_scale)))
+	var body_size := maxi(13, int(round(16 * ui_scale)))
 	var mid := panel.get_center()
 	_draw_centered_label(
 		mid,
@@ -1324,27 +1324,41 @@ func _draw_hard_drop_hint(vp: Vector2) -> void:
 		title_font,
 		title_size_local,
 		ColorTheme.accent(),
-		panel.position.y + 36.0 * ui_scale - mid.y
+		panel.position.y + 32.0 * ui_scale - mid.y
 	)
-	var bind := Keybinds.keys_label(Keybinds.HARD_DROP)
-	var lines: PackedStringArray = PackedStringArray([
-		"Soft drop scores 1 point per cell.",
-		"Hard drop scores 2 points per cell and locks instantly.",
-		"Press %s to hard drop." % bind,
-	])
+	var soft_bind := Keybinds.keys_label(Keybinds.SOFT_DROP)
+	var hard_bind := Keybinds.keys_label(Keybinds.HARD_DROP)
+	var lines: PackedStringArray = PackedStringArray()
 	if PlayDevice.is_touch_primary():
-		lines.append("On touch, use the DROP control.")
+		lines = PackedStringArray([
+			"Soft drop (hold the down control) lowers the",
+			"piece faster for 1 point per cell.",
+			"Hard drop (DROP) locks instantly for 2 points",
+			"per cell - twice the score.",
+			"Use hard drop when you know the landing spot.",
+			"This tip is only shown once.",
+		])
+	else:
+		lines = PackedStringArray([
+			"Soft drop (%s) lowers the piece faster" % soft_bind,
+			"for 1 point per cell.",
+			"Hard drop (%s) locks instantly for 2 points" % hard_bind,
+			"per cell - twice the score.",
+			"Use hard drop when you know the landing spot.",
+			"This tip is only shown once.",
+		])
 	var line_h := (
-		body_font.get_ascent(body_size) + body_font.get_descent(body_size) + 8.0 * ui_scale
+		body_font.get_ascent(body_size) + body_font.get_descent(body_size) + 7.0 * ui_scale
 	)
-	var text_y := panel.position.y + 78.0 * ui_scale
+	var text_y := panel.position.y + 72.0 * ui_scale
 	for i in lines.size():
+		var color := ColorTheme.muted() if i == lines.size() - 1 else ColorTheme.text()
 		_draw_centered_label(
 			mid,
 			str(lines[i]),
 			body_font,
 			body_size,
-			ColorTheme.text(),
+			color,
 			text_y + float(i) * line_h - mid.y
 		)
 	_draw_overlay_button(_hard_drop_hint_resume_rect, "RESUME")
