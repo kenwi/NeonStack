@@ -525,14 +525,29 @@ func _challenge_active() -> bool:
 	return challenges != null and challenges.is_active()
 
 
+var _web_debug_param_cached := false
+var _web_debug_param_on := false
+
+
 func _challenge_friends_unlocked() -> bool:
-	## Soft launch gate: editor always, otherwise only m0b until challenges ship broadly.
+	## Soft launch gate: Godot editor, or web with ?debug=1.
 	if OS.has_feature("editor"):
 		return true
-	if highscores == null:
+	return _web_debug_query_enabled()
+
+
+func _web_debug_query_enabled() -> bool:
+	if not OS.has_feature("web"):
 		return false
-	var player := str(highscores.player_name).strip_edges()
-	return not player.is_empty() and player.to_lower() == "m0b"
+	if _web_debug_param_cached:
+		return _web_debug_param_on
+	_web_debug_param_cached = true
+	var result = JavaScriptBridge.eval(
+		"(function(){try{var q=new URLSearchParams(location.search);var v=(q.get('debug')||'').toLowerCase();return v==='1'||v==='true'||v==='yes'?'1':'';}catch(e){return '';}})()",
+		true
+	)
+	_web_debug_param_on = str(result).strip_edges() == "1"
+	return _web_debug_param_on
 
 
 func _handle_editor_debug_keys(event: InputEvent) -> bool:
@@ -563,6 +578,10 @@ func _build_editor_debug_dump() -> PackedStringArray:
 	lines.append("DEBUG (F1 toggle · F2 clear player)")
 	lines.append("user_data: %s" % OS.get_user_data_dir())
 	lines.append("api: %s" % HighscoreConfig.API_BASE_URL)
+	lines.append(
+		"debug_gate: editor=%s web_debug=%s"
+		% [str(OS.has_feature("editor")), str(_web_debug_query_enabled())]
+	)
 	lines.append(
 		"runtime name: %s"
 		% (str(highscores.player_name) if highscores != null else "(no highscores)")
