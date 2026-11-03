@@ -546,7 +546,8 @@ func _web_debug_query_enabled() -> bool:
 		"(function(){try{var q=new URLSearchParams(location.search);var v=(q.get('debug')||'').toLowerCase();return v==='1'||v==='true'||v==='yes'?'1':'';}catch(e){return '';}})()",
 		true
 	)
-	_web_debug_param_on = str(result).strip_edges() == "1"
+	var raw := str(result).strip_edges().to_lower()
+	_web_debug_param_on = raw == "1" or raw == "true" or raw == "yes"
 	return _web_debug_param_on
 
 
@@ -650,6 +651,31 @@ func _editor_clear_player_data() -> void:
 	_hard_drop_used = false
 	_save_hard_drop_hint_prefs()
 	queue_redraw()
+
+
+func _draw_debug_fps(vp: Vector2) -> void:
+	## Editor, or web with ?debug=1 / true / yes.
+	if not _challenge_friends_unlocked() or body_font == null:
+		return
+	var label := "%d FPS" % Engine.get_frames_per_second()
+	var size := maxi(12, int(round(14 * ui_scale)))
+	var pad := 8.0 * ui_scale
+	var text_w := body_font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x
+	var text_h := body_font.get_ascent(size) + body_font.get_descent(size)
+	var rect := Rect2(10.0, 10.0, text_w + pad * 2.0, text_h + pad)
+	if rect.end.x > vp.x - 10.0:
+		rect.position.x = maxf(10.0, vp.x - rect.size.x - 10.0)
+	draw_rect(rect, ColorTheme.bg_panel(0.9), true, -1.0, true)
+	draw_rect(rect, ColorTheme.accent(0.55), false, 1.5, true)
+	draw_string(
+		body_font,
+		Vector2(rect.position.x + pad, rect.position.y + pad * 0.5 + body_font.get_ascent(size)),
+		label,
+		HORIZONTAL_ALIGNMENT_LEFT,
+		-1,
+		size,
+		ColorTheme.gold()
+	)
 
 
 func _draw_editor_debug(vp: Vector2) -> void:
@@ -2651,6 +2677,7 @@ func _draw() -> void:
 	_draw_side_panels()
 	_draw_hud()
 	_draw_overlays(vp)
+	_draw_debug_fps(vp)
 	_draw_editor_debug(vp)
 
 
