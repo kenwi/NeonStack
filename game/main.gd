@@ -179,13 +179,15 @@ var _diff_pick_index := 0
 var _mode_focus_row := 0 # 0 = difficulty (top), 1 = mode family
 var _mode_choice_rects: Array = []
 var _diff_choice_rects: Array = []
-## Web only: hide the first-run controls overlay after the player has seen it once.
-var _help_seen := false
 ## One-time tip after first soft drop when hard drop has never been used.
 var _hard_drop_hint_seen := false
 var _hard_drop_used := false
 var _hard_drop_hint_open := false
 var _hard_drop_hint_resume_rect := Rect2()
+## One-time "Challenge Friends" feature announcement (debug-gated soft launch).
+var _feature_announce_seen := false
+var _feature_announce_open := false
+var _feature_announce_ok_rect := Rect2()
 
 var drop_timer := 0.0
 var lock_timer := 0.0
@@ -316,15 +318,17 @@ func _ready() -> void:
 		challenges.cleared.connect(_on_challenge_cleared)
 		challenges.closed.connect(_on_challenge_overlay_closed)
 		challenges.start_requested.connect(_on_challenge_start_requested)
-	_load_help_seen()
 	_load_hard_drop_hint_prefs()
+	_load_feature_announce_prefs()
 	_layout()
 	_new_game()
-	# First-run help, then mode picker. Help-seen is stored in user:// (web + native).
-	var show_help := _should_show_startup_help()
-	help_open = show_help
-	mode_select_open = not show_help
+	help_open = false
+	_feature_announce_open = false
+	mode_select_open = true
 	game_mode = ""
+	if _should_show_feature_announce():
+		_feature_announce_open = true
+		mode_select_open = false
 	if challenges != null and challenges.is_active():
 		_on_challenge_activated(challenges.active_data())
 	if PlayDevice.is_touch_primary() and touch != null:
@@ -469,6 +473,7 @@ func _new_game(seed_override: int = -1) -> void:
 	paused = false
 	_hard_drop_hint_open = false
 	_hard_drop_hint_resume_rect = Rect2()
+	_feature_announce_ok_rect = Rect2()
 	help_open = false
 	score_open = false
 	options_open = false
@@ -567,6 +572,7 @@ func _handle_editor_debug_keys(event: InputEvent) -> bool:
 			"DEBUG — player data cleared",
 			"highscore.cfg + challenge.cfg removed",
 			"runtime player name/id + active challenge reset",
+			"feature announce + hard-drop tip prefs reset",
 			"F1 toggle dump · F2 clear again",
 		])
 		queue_redraw()
@@ -595,6 +601,10 @@ func _build_editor_debug_dump() -> PackedStringArray:
 	lines.append(
 		"hard_drop_hint_seen: %s  hard_drop_used: %s"
 		% [str(_hard_drop_hint_seen), str(_hard_drop_used)]
+	)
+	lines.append(
+		"feature_announce_seen: %s  open: %s"
+		% [str(_feature_announce_seen), str(_feature_announce_open)]
 	)
 	if _challenge_active():
 		var data: Dictionary = challenges.active_data()
@@ -650,6 +660,9 @@ func _editor_clear_player_data() -> void:
 	_hard_drop_hint_seen = false
 	_hard_drop_used = false
 	_save_hard_drop_hint_prefs()
+	_feature_announce_open = false
+	_feature_announce_seen = false
+	_save_feature_announce_prefs()
 	queue_redraw()
 
 
@@ -807,6 +820,7 @@ func _overlay_blocks_play() -> bool:
 		or _challenge_overlay_open()
 		or paused
 		or _hard_drop_hint_open
+		or _feature_announce_open
 	)
 
 
@@ -815,7 +829,13 @@ func _challenge_overlay_open() -> bool:
 
 
 func _open_mode_select_if_needed() -> void:
-	if _awaiting_mode() and not help_open and not score_open and not options_open:
+	if (
+		_awaiting_mode()
+		and not help_open
+		and not score_open
+		and not options_open
+		and not _feature_announce_open
+	):
 		_menu_can_resume = false
 		_sync_mode_select_picks_from_run()
 		mode_select_open = true
@@ -1087,7 +1107,7 @@ func _grounded() -> bool:
 
 
 func _hard_drop() -> void:
-	if clear_timer > 0.0 or game_over or paused or _hard_drop_hint_open:
+	if clear_timer > 0.0 or game_over or paused or _hard_drop_hint_open or _feature_announce_open:
 		return
 	_mark_hard_drop_used()
 	var from_cells: Array = _cells(piece_id, piece_rot, piece_pos)
@@ -1206,32 +1226,6 @@ func _save_backdrop_prefs() -> void:
 	cfg.save(BACKDROP_CONFIG_PATH)
 
 
-func _should_show_startup_help() -> bool:
-	# Touch: skip first-run overlay (close tap must not hard-drop).
-	# Desktop (web + native): show once, then remember in user://.
-	if PlayDevice.is_touch_primary():
-		return false
-	return not _help_seen
-
-
-func _load_help_seen() -> void:
-	_help_seen = false
-	var cfg := ConfigFile.new()
-	if cfg.load(UI_CONFIG_PATH) != OK:
-		return
-	_help_seen = bool(cfg.get_value("help", "seen", false))
-
-
-func _mark_help_seen() -> void:
-	if _help_seen:
-		return
-	_help_seen = true
-	var cfg := ConfigFile.new()
-	cfg.load(UI_CONFIG_PATH)
-	cfg.set_value("help", "seen", true)
-	cfg.save(UI_CONFIG_PATH)
-
-
 func _load_hard_drop_hint_prefs() -> void:
 	_hard_drop_hint_seen = false
 	_hard_drop_used = false
@@ -1261,6 +1255,7 @@ func _maybe_offer_hard_drop_hint() -> void:
 	if (
 		replay_mode
 		or _hard_drop_hint_open
+		or _feature_announce_open
 		or _hard_drop_hint_seen
 		or _hard_drop_used
 		or game_over
@@ -1291,6 +1286,192 @@ func _dismiss_hard_drop_hint() -> void:
 	_hard_drop_hint_resume_rect = Rect2()
 	_sync_hold_flags_from_input()
 	queue_redraw()
+
+
+func _load_feature_announce_prefs() -> void:
+	_feature_announce_seen = false
+	var cfg := ConfigFile.new()
+	if cfg.load(UI_CONFIG_PATH) != OK:
+		return
+	_feature_announce_seen = bool(cfg.get_value("announcements", "challenge_friends", false))
+
+
+func _save_feature_announce_prefs() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(UI_CONFIG_PATH)
+	cfg.set_value("announcements", "challenge_friends", _feature_announce_seen)
+	cfg.save(UI_CONFIG_PATH)
+
+
+func _should_show_feature_announce() -> bool:
+	## Soft-launch: editor or ?debug=1|true|yes only, until public rollout.
+	if not _challenge_friends_unlocked():
+		return false
+	return not _feature_announce_seen
+
+
+func _dismiss_feature_announce() -> void:
+	if not _feature_announce_open:
+		return
+	_feature_announce_open = false
+	_feature_announce_ok_rect = Rect2()
+	if not _feature_announce_seen:
+		_feature_announce_seen = true
+		_save_feature_announce_prefs()
+	mode_select_open = true
+	_sync_hold_flags_from_input()
+	queue_redraw()
+
+
+func _handle_feature_announce_input(event: InputEvent) -> bool:
+	if PlayDevice.has_pointer_down(event):
+		var point := PlayDevice.pointer_down_position(event)
+		_layout_feature_announce(get_viewport_rect().size)
+		if (
+			_feature_announce_ok_rect.size.x > 0.0
+			and _feature_announce_ok_rect.has_point(point)
+		):
+			_dismiss_feature_announce()
+			return true
+		return true
+	if not (event is InputEventKey and event.pressed and not event.echo):
+		return false
+	if (
+		_key_pressed(event, KEY_ENTER)
+		or _key_pressed(event, KEY_KP_ENTER)
+		or _key_pressed(event, KEY_SPACE)
+		or _key_pressed(event, KEY_ESCAPE)
+	):
+		_dismiss_feature_announce()
+		return true
+	return true
+
+
+func _feature_announce_paragraphs() -> PackedStringArray:
+	return PackedStringArray([
+		"Challenge your friends with a private board.",
+		"Create a challenge, share the invite link, and compete on the same rules and difficulty.",
+		"Open it from the game mode screen with CHALLENGE YOUR FRIENDS.",
+	])
+
+
+func _feature_announce_metrics(vp: Vector2) -> Dictionary:
+	var panel_w := minf(480.0 * ui_scale, vp.x - 24.0)
+	var pad_x := 28.0 * ui_scale
+	var pad_top := 28.0 * ui_scale
+	var pad_bottom := 20.0 * ui_scale
+	var title_size_local := maxi(20, int(round(26 * ui_scale)))
+	var body_size := maxi(13, int(round(15 * ui_scale)))
+	var note_size := maxi(12, body_size - 1)
+	var btn_h := maxf(44.0, 48.0 * ui_scale)
+	var max_w := panel_w - pad_x * 2.0
+	var line_h := (
+		body_font.get_ascent(body_size) + body_font.get_descent(body_size) + 5.0 * ui_scale
+	)
+	var note_line_h := (
+		body_font.get_ascent(note_size) + body_font.get_descent(note_size) + 4.0 * ui_scale
+	)
+	var lines: PackedStringArray = PackedStringArray()
+	var paragraphs := _feature_announce_paragraphs()
+	for i in paragraphs.size():
+		if i > 0:
+			lines.append("")
+		lines.append_array(_wrap_text_lines(str(paragraphs[i]), body_font, body_size, max_w))
+	var note_lines := _wrap_text_lines(
+		"This announcement is only shown once.",
+		body_font,
+		note_size,
+		max_w
+	)
+	var title_h := title_font.get_ascent(title_size_local) + title_font.get_descent(title_size_local)
+	var body_block_h := line_h * float(maxi(1, lines.size()))
+	var note_block_h := note_line_h * float(maxi(1, note_lines.size()))
+	var panel_h := (
+		pad_top
+		+ title_h
+		+ 18.0 * ui_scale
+		+ body_block_h
+		+ 14.0 * ui_scale
+		+ note_block_h
+		+ 16.0 * ui_scale
+		+ btn_h
+		+ pad_bottom
+	)
+	panel_h = minf(panel_h, vp.y - 16.0)
+	var center := _board_center()
+	var panel := Rect2(center - Vector2(panel_w, panel_h) * 0.5, Vector2(panel_w, panel_h))
+	panel.position.y = clampf(panel.position.y, 8.0, maxf(8.0, vp.y - panel.size.y - 8.0))
+	var btn_w := minf(220.0 * ui_scale, panel.size.x - pad_x * 2.0)
+	var ok_rect := Rect2(
+		panel.get_center().x - btn_w * 0.5,
+		panel.end.y - pad_bottom - btn_h,
+		btn_w,
+		btn_h
+	)
+	return {
+		"panel": panel,
+		"ok": ok_rect,
+		"pad_top": pad_top,
+		"title_size": title_size_local,
+		"body_size": body_size,
+		"note_size": note_size,
+		"line_h": line_h,
+		"note_line_h": note_line_h,
+		"lines": lines,
+		"note_lines": note_lines,
+		"title_h": title_h,
+	}
+
+
+func _layout_feature_announce(vp: Vector2) -> void:
+	var metrics := _feature_announce_metrics(vp)
+	_feature_announce_ok_rect = metrics["ok"]
+
+
+func _draw_feature_announce(vp: Vector2) -> void:
+	var metrics := _feature_announce_metrics(vp)
+	_feature_announce_ok_rect = metrics["ok"]
+	var panel: Rect2 = metrics["panel"]
+	var pad_top: float = float(metrics["pad_top"])
+	var title_size_local: int = int(metrics["title_size"])
+	var body_size: int = int(metrics["body_size"])
+	var note_size: int = int(metrics["note_size"])
+	var line_h: float = float(metrics["line_h"])
+	var note_line_h: float = float(metrics["note_line_h"])
+	var lines: PackedStringArray = metrics["lines"]
+	var note_lines: PackedStringArray = metrics["note_lines"]
+	var title_h: float = float(metrics["title_h"])
+	draw_rect(Rect2(Vector2.ZERO, vp), Color(0, 0, 0, 0.62))
+	draw_rect(panel, ColorTheme.bg_panel(0.96), true, -1.0, true)
+	draw_rect(panel, ColorTheme.accent(0.55), false, 1.5, true)
+	var mid := panel.get_center()
+	var title_y := panel.position.y + pad_top + title_font.get_ascent(title_size_local)
+	_draw_centered_label(
+		mid,
+		"NEW FEATURE",
+		title_font,
+		title_size_local,
+		ColorTheme.accent(),
+		title_y - mid.y
+	)
+	var y := panel.position.y + pad_top + title_h + 18.0 * ui_scale + body_font.get_ascent(body_size)
+	for i in lines.size():
+		var line := str(lines[i])
+		if not line.is_empty():
+			_draw_centered_label(mid, line, body_font, body_size, ColorTheme.text(), y - mid.y)
+		y += line_h
+	y += 14.0 * ui_scale - body_font.get_ascent(body_size) + body_font.get_ascent(note_size)
+	for i in note_lines.size():
+		_draw_centered_label(
+			mid,
+			str(note_lines[i]),
+			body_font,
+			note_size,
+			ColorTheme.muted(),
+			y - mid.y
+		)
+		y += note_line_h
+	_draw_overlay_button(_feature_announce_ok_rect, "CONTINUE")
 
 
 func _handle_hard_drop_hint_input(event: InputEvent) -> bool:
@@ -1458,8 +1639,6 @@ func _draw_hard_drop_hint(vp: Vector2) -> void:
 
 
 func _dismiss_help() -> void:
-	if help_open:
-		_mark_help_seen()
 	help_open = false
 
 
@@ -1649,6 +1828,7 @@ func _process(delta: float) -> void:
 		game_over
 		or paused
 		or _hard_drop_hint_open
+		or _feature_announce_open
 		or help_open
 		or score_open
 		or options_open
@@ -1680,6 +1860,7 @@ func _process(delta: float) -> void:
 		if not replay_mode and (
 			paused
 			or _hard_drop_hint_open
+			or _feature_announce_open
 			or help_open
 			or score_open
 			or options_open
@@ -1805,6 +1986,7 @@ func _can_accept_play_action() -> bool:
 		not game_over
 		and not paused
 		and not _hard_drop_hint_open
+		and not _feature_announce_open
 		and not help_open
 		and not score_open
 		and not options_open
@@ -2201,6 +2383,18 @@ func _handle_touch_overlay(event: InputEvent) -> bool:
 		if not _awaiting_mode():
 			_new_game()
 		return true
+	if _feature_announce_open:
+		if (
+			_feature_announce_ok_rect.size.x > 0.0
+			and _feature_announce_ok_rect.has_point(point)
+		):
+			_dismiss_feature_announce()
+			if touch != null:
+				touch.suppress_play_taps()
+			return true
+		if touch != null:
+			touch.suppress_play_taps()
+		return true
 	if _hard_drop_hint_open:
 		if (
 			_hard_drop_hint_resume_rect.size.x > 0.0
@@ -2384,6 +2578,13 @@ func _input(event: InputEvent) -> void:
 		return
 	if _handle_touch_overlay(event):
 		get_viewport().set_input_as_handled()
+		return
+	if _feature_announce_open:
+		if music != null and music.handle_input(event):
+			get_viewport().set_input_as_handled()
+			return
+		if _handle_feature_announce_input(event):
+			get_viewport().set_input_as_handled()
 		return
 	if mode_select_open:
 		# Allow mute / volume while the picker is open.
@@ -2569,6 +2770,10 @@ func _input(event: InputEvent) -> void:
 		or _challenge_overlay_open()
 	):
 		get_viewport().set_input_as_handled()
+		return
+	if _feature_announce_open:
+		if _handle_feature_announce_input(event):
+			get_viewport().set_input_as_handled()
 		return
 	if _hard_drop_hint_open:
 		if _handle_hard_drop_hint_input(event):
@@ -4005,6 +4210,9 @@ func _handle_options_keys(event: InputEvent) -> bool:
 
 func _draw_overlays(vp: Vector2) -> void:
 	_sync_touch_overlay_rects()
+	if _feature_announce_open and not replay_mode:
+		_draw_feature_announce(vp)
+		return
 	if _hard_drop_hint_open and not replay_mode:
 		_draw_hard_drop_hint(vp)
 		return
