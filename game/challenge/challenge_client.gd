@@ -547,34 +547,74 @@ func _draw_create(panel: Rect2) -> void:
 		_draw_choice(_leave_rect, "LEAVE", false, body_size)
 
 
-func _draw_share(_panel: Rect2) -> void:
-	var body_size := maxi(12, int(round(15 * _ui_scale)))
-	var section_size := maxi(11, int(round(12 * _ui_scale)))
-	var title_size := maxi(18, int(round(24 * _ui_scale)))
-	_draw_centered(
-		_title_font,
-		Vector2(_panel.get_center().x, _panel.position.y + 28.0 * _ui_scale),
-		str(active_board.get("name", "CHALLENGE")).to_upper(),
-		title_size,
-		ColorTheme.accent()
+func _share_title_lines(panel_w: float, title_size: int) -> PackedStringArray:
+	var title := str(active_board.get("name", "CHALLENGE")).to_upper()
+	var max_w := maxf(40.0, panel_w - 32.0 * _ui_scale)
+	var font: Font = _title_font if _title_font != null else ThemeDB.fallback_font
+	return _wrap_text_lines(title, font, title_size, max_w)
+
+
+func _share_title_line_h(title_size: int) -> float:
+	if _title_font != null:
+		return (
+			_title_font.get_ascent(title_size) + _title_font.get_descent(title_size) + 4.0 * _ui_scale
+		)
+	return 26.0 * _ui_scale
+
+
+func _share_meta_h(panel_w: float) -> float:
+	var ui := _ui_scale
+	var title_size := maxi(18, int(round(24 * ui)))
+	var title_lines := _share_title_lines(panel_w, title_size)
+	var title_line_h := _share_title_line_h(title_size)
+	# Title block + invite/settings (+ optional status) above the buttons.
+	return (
+		28.0 * ui
+		+ title_line_h * float(maxi(1, title_lines.size()))
+		+ 12.0 * ui
+		+ 18.0 * ui
+		+ 22.0 * ui
+		+ 18.0 * ui
+		+ (18.0 * ui if not status_text.is_empty() else 0.0)
 	)
+
+
+func _draw_share(panel: Rect2) -> void:
+	var ui := _ui_scale
+	var body_size := maxi(12, int(round(15 * ui)))
+	var section_size := maxi(11, int(round(12 * ui)))
+	var title_size := maxi(18, int(round(24 * ui)))
+	var title_lines := _share_title_lines(panel.size.x, title_size)
+	var title_line_h := _share_title_line_h(title_size)
+	var y := panel.position.y + 28.0 * ui
+	for i in title_lines.size():
+		_draw_centered(
+			_title_font,
+			Vector2(panel.get_center().x, y + float(i) * title_line_h),
+			str(title_lines[i]),
+			title_size,
+			ColorTheme.accent()
+		)
+	y += title_line_h * float(maxi(1, title_lines.size())) + 12.0 * ui
 	_draw_centered(
 		_body_font,
-		Vector2(_panel.get_center().x, _panel.position.y + 62.0 * _ui_scale),
+		Vector2(panel.get_center().x, y),
 		"Invite link",
 		section_size,
 		ColorTheme.muted()
 	)
+	y += 18.0 * ui
 	var link := share_link
 	if link.length() > 42:
 		link = "…%s" % link.substr(link.length() - 40)
 	_draw_centered(
 		_body_font,
-		Vector2(_panel.get_center().x, _panel.position.y + 80.0 * _ui_scale),
+		Vector2(panel.get_center().x, y),
 		link,
 		maxi(11, body_size - 2),
 		ColorTheme.text()
 	)
+	y += 22.0 * ui
 	var mode_label := str(GameModes.FAMILY_LABELS.get(str(active_board.get("family", "")), ""))
 	var diff_label := str(GameModes.DIFFICULTY_LABELS.get(str(active_board.get("difficulty", "")), ""))
 	var settings := "Mode: %s  Difficulty: %s" % [mode_label, diff_label]
@@ -585,15 +625,16 @@ func _draw_share(_panel: Rect2) -> void:
 			settings = "%s  ·  %s" % [settings, period_label]
 	_draw_centered(
 		_body_font,
-		Vector2(_panel.get_center().x, _panel.position.y + 102.0 * _ui_scale),
+		Vector2(panel.get_center().x, y),
 		settings,
 		section_size,
 		ColorTheme.muted()
 	)
 	if not status_text.is_empty():
+		y += 18.0 * ui
 		_draw_centered(
 			_body_font,
-			Vector2(_panel.get_center().x, _panel.position.y + 120.0 * _ui_scale),
+			Vector2(panel.get_center().x, y),
 			status_text,
 			maxi(11, body_size - 1),
 			ColorTheme.gold()
@@ -620,7 +661,7 @@ func _layout_panel(vp: Vector2) -> Rect2:
 	var hint_block_h := 0.0
 	var panel_h := 0.0
 	if phase == Phase.SHARE or phase == Phase.JOINING:
-		var meta_h := 120.0 * ui if not status_text.is_empty() else 102.0 * ui
+		var meta_h := _share_meta_h(panel_w)
 		panel_h = minf(meta_h + 14.0 * ui + btn_h + gap + btn_h + pad, vp.y - 16.0)
 	if phase != Phase.SHARE and phase != Phase.JOINING:
 		var hint_size := maxi(10, int(round(13 * ui)))
@@ -661,7 +702,7 @@ func _layout_panel(vp: Vector2) -> Rect2:
 	)
 	panel.position.y = clampf(panel.position.y, 8.0, maxf(8.0, vp.y - panel.size.y - 8.0))
 	if phase == Phase.SHARE or phase == Phase.JOINING:
-		var meta_h := 120.0 * ui if not status_text.is_empty() else 102.0 * ui
+		var meta_h := _share_meta_h(panel_w)
 		_copy_rect = Rect2(
 			panel.position.x + pad,
 			panel.position.y + meta_h + 14.0 * ui,

@@ -3296,12 +3296,21 @@ func _layout_mode_select(vp: Vector2) -> Dictionary:
 		else maxf(40.0, 44.0 * ui_scale)
 	)
 	var leave_h := maxf(36.0, 38.0 * ui_scale) if challenge_on else 0.0
-	var title_h := title_font.get_ascent(title_size_local) + title_font.get_descent(title_size_local)
+	var title_line_h := (
+		title_font.get_ascent(title_size_local)
+		+ title_font.get_descent(title_size_local)
+		+ 4.0 * ui_scale
+	)
 	var section_h := body_font.get_ascent(section_size) + body_font.get_descent(section_size)
 	var line_h := body_font.get_ascent(hint_size_local) + body_font.get_descent(hint_size_local) + 4.0 * ui_scale
 	var footer_h := 0.0
 	var panel_w := minf(460.0 * ui_scale, vp.x - 16.0)
 	var hint_max_w := panel_w - pad_x * 2.0
+	var title := "GAME MODE"
+	if challenge_on:
+		title = str(challenges.active_data().get("name", "CHALLENGE")).to_upper()
+	var title_lines := _wrap_text_lines(title, title_font, title_size_local, hint_max_w)
+	var title_h := title_line_h * float(maxi(1, title_lines.size()))
 	var hint_text := GameModes.hint_for_selection(
 		_mode_family_at(_mode_pick_index),
 		_difficulty_at(_diff_pick_index)
@@ -3418,6 +3427,8 @@ func _layout_mode_select(vp: Vector2) -> Dictionary:
 		"pad_x": pad_x,
 		"pad_top": pad_top,
 		"title_size": title_size_local,
+		"title_line_h": title_line_h,
+		"title_lines": title_lines,
 		"row_size": row_size,
 		"section_size": section_size,
 		"mode_section_y": mode_section_y,
@@ -3450,22 +3461,24 @@ func _draw_mode_select(vp: Vector2) -> void:
 	draw_rect(panel, ColorTheme.bg_panel(0.96), true, -1.0, true)
 	draw_rect(panel, ColorTheme.accent(0.45), false, 1.5, true)
 	var challenge_on: bool = bool(layout.get("challenge_on", false))
-	var title := "GAME MODE"
-	if challenge_on:
-		title = str(challenges.active_data().get("name", "CHALLENGE")).to_upper()
-	var title_w := title_font.get_string_size(title, HORIZONTAL_ALIGNMENT_LEFT, -1, title_size_local).x
-	draw_string(
-		title_font,
-		Vector2(
-			panel.position.x + (panel.size.x - title_w) * 0.5,
-			panel.position.y + pad_top + title_font.get_ascent(title_size_local)
-		),
-		title,
-		HORIZONTAL_ALIGNMENT_LEFT,
-		-1,
-		title_size_local,
-		ColorTheme.accent()
-	)
+	var title_lines: PackedStringArray = layout.get("title_lines", PackedStringArray(["GAME MODE"]))
+	var title_line_h: float = float(layout.get("title_line_h", title_font.get_ascent(title_size_local) + title_font.get_descent(title_size_local) + 4.0 * ui_scale))
+	var title_y0 := panel.position.y + pad_top + title_font.get_ascent(title_size_local)
+	for i in title_lines.size():
+		var line := str(title_lines[i])
+		var title_w := title_font.get_string_size(line, HORIZONTAL_ALIGNMENT_LEFT, -1, title_size_local).x
+		draw_string(
+			title_font,
+			Vector2(
+				panel.position.x + (panel.size.x - title_w) * 0.5,
+				title_y0 + float(i) * title_line_h
+			),
+			line,
+			HORIZONTAL_ALIGNMENT_LEFT,
+			-1,
+			title_size_local,
+			ColorTheme.accent()
+		)
 	if challenge_on:
 		var banner := "Private challenge · locked settings"
 		var banner_w := body_font.get_string_size(banner, HORIZONTAL_ALIGNMENT_LEFT, -1, hint_size).x
