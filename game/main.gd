@@ -184,7 +184,7 @@ var _hard_drop_hint_seen := false
 var _hard_drop_used := false
 var _hard_drop_hint_open := false
 var _hard_drop_hint_resume_rect := Rect2()
-## One-time "Challenge Friends" feature announcement (debug-gated soft launch).
+## One-time "Challenge Friends" feature announcement.
 var _feature_announce_seen := false
 var _feature_announce_open := false
 var _feature_announce_ok_rect := Rect2()
@@ -535,7 +535,12 @@ var _web_debug_param_on := false
 
 
 func _challenge_friends_unlocked() -> bool:
-	## Soft launch gate: Godot editor, or web with ?debug=1.
+	## Public: Challenge Friends is live for all players.
+	return true
+
+
+func _debug_tools_unlocked() -> bool:
+	## Editor, or web with ?debug=1|true|yes (F1/F2, FPS).
 	if OS.has_feature("editor"):
 		return true
 	return _web_debug_query_enabled()
@@ -667,8 +672,7 @@ func _editor_clear_player_data() -> void:
 
 
 func _draw_debug_fps(vp: Vector2) -> void:
-	## Editor, or web with ?debug=1 / true / yes.
-	if not _challenge_friends_unlocked() or body_font == null:
+	if not _debug_tools_unlocked() or body_font == null:
 		return
 	var label := "%d FPS" % Engine.get_frames_per_second()
 	var size := maxi(12, int(round(14 * ui_scale)))
@@ -1304,9 +1308,6 @@ func _save_feature_announce_prefs() -> void:
 
 
 func _should_show_feature_announce() -> bool:
-	## Soft-launch: editor or ?debug=1|true|yes only, until public rollout.
-	if not _challenge_friends_unlocked():
-		return false
 	return not _feature_announce_seen
 
 
@@ -2563,7 +2564,7 @@ func _handle_mode_select_keys(event: InputEvent) -> bool:
 
 
 func _input(event: InputEvent) -> void:
-	if _challenge_friends_unlocked() and _handle_editor_debug_keys(event):
+	if _debug_tools_unlocked() and _handle_editor_debug_keys(event):
 		get_viewport().set_input_as_handled()
 		return
 	# Name entry / submit owns the keyboard so game and music binds do not fire.
