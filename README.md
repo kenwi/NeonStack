@@ -185,6 +185,14 @@ godot --headless --path . --export-release "Web" build/web/index.html
 - Replay determinism depends on tick order and recorded timings (`arr`). Same-tick events keep recording order (stable sort on load).
 - Do not commit `server/data/highscores.json`, `server/.env`, or `build/` (see `.gitignore`).
 
+### Debug tools
+
+Debug tools are on in the Godot editor, and in a web build opened with `?debug=1` (`true` and `yes` also work). Exported desktop builds leave them off.
+
+- FPS counter in the top-left
+- **F1** toggles a dump of local player state (user-data path, API URL, player id, active challenge, `highscore.cfg` and `challenge.cfg`)
+- **F2** clears that local state: deletes those cfg files, leaves the active challenge, and resets the player name, player id, feature announcement, and hard-drop tip
+
 ---
 
 ## License
