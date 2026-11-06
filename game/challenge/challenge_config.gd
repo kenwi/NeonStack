@@ -16,6 +16,8 @@ const CFG_NAME := "name"
 const CFG_FAMILY := "family"
 const CFG_DIFFICULTY := "difficulty"
 const CFG_PERIOD_UNIX := "period_unix"
+## Synchronous browser store. user:// on web is IndexedDB and can keep the pre-leave file.
+const WEB_STORAGE_KEY := "neonstack.challenge"
 
 
 static func score_mode_id(token: String, touch_primary: bool) -> String:
@@ -114,47 +116,97 @@ static func api_base() -> String:
 
 
 static func load_active() -> Dictionary:
-	var cfg := ConfigFile.new()
-	if cfg.load(CFG_PATH) != OK:
-		return {}
-	var token := sanitize_token(str(cfg.get_value(CFG_SECTION, CFG_TOKEN, "")))
-	if token.is_empty():
-		return {}
-	var family := str(cfg.get_value(CFG_SECTION, CFG_FAMILY, "classic"))
-	var difficulty := str(cfg.get_value(CFG_SECTION, CFG_DIFFICULTY, "classic"))
-	var period := int(cfg.get_value(CFG_SECTION, CFG_PERIOD_UNIX, 0))
-	return {
-		"id": token,
-		"name": str(cfg.get_value(CFG_SECTION, CFG_NAME, "Challenge")),
-		"family": family,
-		"difficulty": difficulty,
-		"periodUnix": period if period > 0 else 0,
-	}
+	if OS.has_feature("web"):
+		var raw := _web_storage_read()
+		if raw == "empty":
+			return {}
+		if raw.begins_with("json:"):
+			var parsed = JSON.parse_string(raw.substr(5))
+			if typeof(parsed) == TYPE_DICTIONARY:
+				return _board_from_dict(parsed)
+			return {}
+	var from_cfg := _load_cfg()
+	if OS.has_feature("web"):
+		# First visit after this store existed: keep a joined challenge, remember a leave.
+		_web_storage_write("" if from_cfg.is_empty() else JSON.stringify(from_cfg))
+	return from_cfg
 
 
 static func save_active(data: Dictionary) -> void:
-	var token := sanitize_token(str(data.get("id", "")))
-	if token.is_empty():
+	var board := _board_from_dict(data)
+	if board.is_empty():
 		clear_active()
 		return
+	if OS.has_feature("web"):
+		_web_storage_write(JSON.stringify(board))
 	var cfg := ConfigFile.new()
 	cfg.load(CFG_PATH)
-	cfg.set_value(CFG_SECTION, CFG_TOKEN, token)
-	cfg.set_value(CFG_SECTION, CFG_NAME, str(data.get("name", "Challenge")))
-	cfg.set_value(CFG_SECTION, CFG_FAMILY, str(data.get("family", "classic")))
-	cfg.set_value(CFG_SECTION, CFG_DIFFICULTY, str(data.get("difficulty", "classic")))
-	var period_unix := int(data.get("periodUnix", 0))
-	cfg.set_value(CFG_SECTION, CFG_PERIOD_UNIX, period_unix if period_unix > 0 else 0)
+	cfg.set_value(CFG_SECTION, CFG_TOKEN, str(board.get("id", "")))
+	cfg.set_value(CFG_SECTION, CFG_NAME, str(board.get("name", "Challenge")))
+	cfg.set_value(CFG_SECTION, CFG_FAMILY, str(board.get("family", "classic")))
+	cfg.set_value(CFG_SECTION, CFG_DIFFICULTY, str(board.get("difficulty", "classic")))
+	cfg.set_value(CFG_SECTION, CFG_PERIOD_UNIX, int(board.get("periodUnix", 0)))
 	cfg.save(CFG_PATH)
 
 
 static func clear_active() -> void:
-	var cfg := ConfigFile.new()
-	cfg.load(CFG_PATH)
-	if cfg.has_section(CFG_SECTION):
-		cfg.erase_section(CFG_SECTION)
-	cfg.save(CFG_PATH)
+	if OS.has_feature("web"):
+		_web_storage_write("")
+	_clear_cfg_file()
 	clear_deep_link()
+
+
+static func _board_from_dict(data: Dictionary) -> Dictionary:
+	var token := sanitize_token(str(data.get("id", "")))
+	if token.is_empty():
+		return {}
+	var period := int(data.get("periodUnix", data.get("period_unix", 0)))
+	return {
+		"id": token,
+		"name": str(data.get("name", "Challenge")),
+		"family": str(data.get("family", "classic")),
+		"difficulty": str(data.get("difficulty", "classic")),
+		"periodUnix": period if period > 0 else 0,
+	}
+
+
+static func _load_cfg() -> Dictionary:
+	var cfg := ConfigFile.new()
+	if cfg.load(CFG_PATH) != OK:
+		return {}
+	return _board_from_dict({
+		"id": str(cfg.get_value(CFG_SECTION, CFG_TOKEN, "")),
+		"name": str(cfg.get_value(CFG_SECTION, CFG_NAME, "Challenge")),
+		"family": str(cfg.get_value(CFG_SECTION, CFG_FAMILY, "classic")),
+		"difficulty": str(cfg.get_value(CFG_SECTION, CFG_DIFFICULTY, "classic")),
+		"periodUnix": int(cfg.get_value(CFG_SECTION, CFG_PERIOD_UNIX, 0)),
+	})
+
+
+static func _clear_cfg_file() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(CFG_PATH) == OK and cfg.has_section(CFG_SECTION):
+		cfg.erase_section(CFG_SECTION)
+		cfg.save(CFG_PATH)
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(CFG_PATH))
+
+
+static func _web_storage_read() -> String:
+	var result = JavaScriptBridge.eval(
+		"(function(){try{var v=localStorage.getItem('%s');if(v===null)return 'missing';if(v==='')return 'empty';return 'json:'+v;}catch(e){return 'missing';}})()" % WEB_STORAGE_KEY,
+		true
+	)
+	return str(result)
+
+
+static func _web_storage_write(payload: String) -> void:
+	JavaScriptBridge.eval(
+		"(function(){try{localStorage.setItem('%s', decodeURIComponent('%s'));}catch(e){}})()" % [
+			WEB_STORAGE_KEY,
+			payload.uri_encode(),
+		],
+		true
+	)
 
 
 static func parse_deep_link_token() -> String:
