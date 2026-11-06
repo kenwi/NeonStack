@@ -154,6 +154,7 @@ static func clear_active() -> void:
 	if cfg.has_section(CFG_SECTION):
 		cfg.erase_section(CFG_SECTION)
 	cfg.save(CFG_PATH)
+	clear_deep_link()
 
 
 static func parse_deep_link_token() -> String:
@@ -164,6 +165,16 @@ static func parse_deep_link_token() -> String:
 		true
 	)
 	return sanitize_token(str(result))
+
+
+## Drop ?c= so a refresh after Leave does not join again. Other query params stay.
+static func clear_deep_link() -> void:
+	if not OS.has_feature("web"):
+		return
+	JavaScriptBridge.eval(
+		"(function(){try{var u=new URL(location.href);if(!u.searchParams.has('c'))return;u.searchParams.delete('c');history.replaceState(null,'',u.pathname+u.search+u.hash);}catch(e){}})()",
+		true
+	)
 
 
 static func copy_text_to_clipboard(text: String) -> bool:
