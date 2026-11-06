@@ -516,6 +516,12 @@ func _new_game(seed_override: int = -1) -> void:
 	queue_redraw()
 
 
+func _start_player_run() -> void:
+	_new_game()
+	if highscores != null and highscores.has_method("notify_session_start"):
+		highscores.notify_session_start()
+
+
 func _make_run_seed() -> int:
 	if game_mode == GameModes.DAILY or game_mode == GameModes.WEEKLY:
 		var period := _challenge_period_unix if _challenge_period_unix > 0 else -1
@@ -999,7 +1005,7 @@ func _confirm_game_mode(mode: String, diff: String = "") -> void:
 		elif highscores.has_method("set_game_mode"):
 			var period := _challenge_period_unix if _challenge_period_unix > 0 else -1
 			highscores.set_game_mode(game_mode, period, difficulty)
-	_new_game()
+	_start_player_run()
 	_sync_hold_flags_from_input()
 	if touch != null:
 		touch.suppress_play_taps(400)
@@ -2382,7 +2388,7 @@ func _handle_touch_overlay(event: InputEvent) -> bool:
 		return true
 	if _touch_restart_rect.size.x > 0.0 and _touch_restart_rect.has_point(point):
 		if not _awaiting_mode():
-			_new_game()
+			_start_player_run()
 		return true
 	if _feature_announce_open:
 		if (
@@ -2692,7 +2698,7 @@ func _input(event: InputEvent) -> void:
 		if replay_mode:
 			stop_replay()
 		elif not _awaiting_mode() and not mode_select_open:
-			_new_game()
+			_start_player_run()
 		get_viewport().set_input_as_handled()
 		return
 	if Keybinds.matches_pressed(event, Keybinds.HIGHSCORES):
@@ -2747,7 +2753,7 @@ func _input(event: InputEvent) -> void:
 	if game_over:
 		if Keybinds.matches_pressed(event, Keybinds.HARD_DROP):
 			if not _awaiting_mode():
-				_new_game()
+				_start_player_run()
 			get_viewport().set_input_as_handled()
 		return
 	# Hold releases must never be dropped: missing OFF leaves DAS stuck after clear/UI/pause.

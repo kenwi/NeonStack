@@ -139,6 +139,46 @@ app.MapGet("/api/challenges/{id}", async (
     return Results.Ok(challenge);
 });
 
+app.MapPost("/api/sessions", (
+    SessionStartRequest request,
+    HttpContext httpContext,
+    ILogger<Program> logger) =>
+{
+    var clientIp = httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+    var origin = httpContext.Request.Headers.Origin.ToString();
+    var userAgent = httpContext.Request.Headers.UserAgent.ToString();
+    var modeId = ScoreSanitizer.SanitizeModeId(request.ModeId);
+    var playerName = ScoreSanitizer.SanitizePlayerName(request.PlayerName);
+    var playerId = ScoreSanitizer.SanitizePlayerId(request.PlayerId);
+
+    logger.LogInformation(
+        "POST /api/sessions request: ClientIp={ClientIp}, Origin={Origin}, UserAgent={UserAgent}, ModeId={ModeId}",
+        clientIp,
+        string.IsNullOrEmpty(origin) ? "(none)" : origin,
+        string.IsNullOrEmpty(userAgent) ? "(none)" : userAgent,
+        string.IsNullOrEmpty(modeId) ? "(none)" : modeId);
+
+    if (string.IsNullOrEmpty(modeId))
+    {
+        logger.LogWarning(
+            "POST /api/sessions rejected: ClientIp={ClientIp}, ModeId={ModeId}, PlayerName={PlayerName}, PlayerId={PlayerId}, Error={Error}",
+            clientIp,
+            "(none)",
+            playerName,
+            string.IsNullOrEmpty(playerId) ? "(none)" : playerId,
+            "ModeId is required.");
+        return Results.BadRequest(new { error = "ModeId is required." });
+    }
+
+    logger.LogInformation(
+        "POST /api/sessions succeeded: ClientIp={ClientIp}, ModeId={ModeId}, PlayerName={PlayerName}, PlayerId={PlayerId}",
+        clientIp,
+        modeId,
+        playerName,
+        string.IsNullOrEmpty(playerId) ? "(none)" : playerId);
+    return Results.Ok(new { message = "Session started." });
+});
+
 app.MapPost("/api/scores", async (
     ScoreSubmission submission,
     JsonFileScoreStore store,

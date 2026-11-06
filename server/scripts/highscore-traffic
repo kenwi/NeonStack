@@ -40,10 +40,11 @@ ORIGIN_RE = re.compile(r"Origin=(\S+)")
 UA_RE = re.compile(r"UserAgent=(.+?)(?:\s+SpanId=|\s+TraceId=|\])")
 
 # Kind order used in tables and stacked charts.
-KIND_ORDER = ("read", "submit", "replay_up", "replay_down", "cors", "other")
+KIND_ORDER = ("read", "submit", "session", "replay_up", "replay_down", "cors", "other")
 KIND_LABELS = {
     "read": "board reads",
     "submit": "score posts",
+    "session": "session starts",
     "replay_up": "replay uploads",
     "replay_down": "replay downloads",
     "cors": "CORS preflight",
@@ -54,6 +55,7 @@ KIND_LABELS = {
 KIND_COLORS_LIGHT = {
     "read": "#3aa0ff",
     "submit": "#2bb673",
+    "session": "#14b8a6",
     "replay_up": "#ff7a3a",
     "replay_down": "#9b59b6",
     "cors": "#9aa0a6",
@@ -62,6 +64,7 @@ KIND_COLORS_LIGHT = {
 KIND_COLORS_DARK = {
     "read": "#5eb1ff",
     "submit": "#5bd68a",
+    "session": "#2dd4bf",
     "replay_up": "#ff9a5c",
     "replay_down": "#c792ea",
     "cors": "#9aa0a6",
@@ -135,6 +138,8 @@ def classify(method: str, path: str) -> str:
         return "read"
     if method == "POST" and path_only.rstrip("/") == "/api/scores":
         return "submit"
+    if method == "POST" and path_only.rstrip("/") == "/api/sessions":
+        return "session"
     if method == "POST" and path_only.rstrip("/") == "/api/replays":
         return "replay_up"
     if method == "GET" and path_only.startswith("/api/replays"):
@@ -274,7 +279,7 @@ def print_table(buckets: list[Bucket], verbose: bool) -> None:
         print("No HTTP requests in range.")
         return
 
-    headers = ["When", "Total", "Reads", "Submit", "Replay↑", "Replay↓", "CORS", "Other", "IPs", "Avg ms"]
+    headers = ["When", "Total", "Reads", "Submit", "Start", "Replay↑", "Replay↓", "CORS", "Other", "IPs", "Avg ms"]
     if verbose:
         headers.extend(["2xx", "4xx", "5xx"])
 
@@ -285,6 +290,7 @@ def print_table(buckets: list[Bucket], verbose: bool) -> None:
             fmt_int(b.total),
             fmt_int(b.by_kind["read"]),
             fmt_int(b.by_kind["submit"]),
+            fmt_int(b.by_kind["session"]),
             fmt_int(b.by_kind["replay_up"]),
             fmt_int(b.by_kind["replay_down"]),
             fmt_int(b.by_kind["cors"]),

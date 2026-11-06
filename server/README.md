@@ -35,6 +35,7 @@ API:
 - `GET  http://localhost:5090/api/scores/daily-2026-10-31?top=10`
 - `GET  http://localhost:5090/api/scores/hardcore-weekly-2026-W44-mobile?top=10`
 - `POST http://localhost:5090/api/scores`
+- `POST http://localhost:5090/api/sessions` (log a game start; not stored)
 - `POST http://localhost:5090/api/challenges` (create private board)
 - `GET  http://localhost:5090/api/challenges/{id}`
 

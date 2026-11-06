@@ -288,7 +288,8 @@ func _on_press(id: String) -> void:
 		if main.replay_mode:
 			main.stop_replay()
 		elif str(main.get("game_mode")) != "" and not main.mode_select_open:
-			main._new_game()
+			if main.has_method("_start_player_run"):
+				main._start_player_run()
 	elif id == "mute":
 		var music := main.get_node_or_null("Music")
 		if music != null:

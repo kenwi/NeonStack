@@ -237,6 +237,23 @@ func reset_run() -> void:
 	queue_redraw()
 
 
+func notify_session_start() -> void:
+	if submit_mode_id.is_empty():
+		return
+	var mode_id: String = HighscoreChecksum.sanitize_mode_id(submit_mode_id)
+	if mode_id.is_empty():
+		return
+	var payload := {
+		"modeId": mode_id,
+		"playerName": HighscoreChecksum.sanitize_player_name(player_name),
+		"playerId": HighscoreConfig.ensure_player_id(),
+	}
+	var body := JSON.stringify(payload)
+	var headers := PackedStringArray(["Content-Type: application/json"])
+	var url := "%s/api/sessions" % HighscoreConfig.API_BASE_URL.trim_suffix("/")
+	_send("session", url, headers, HTTPClient.METHOD_POST, body, mode_id, 0)
+
+
 func begin_game_over(score: int, lines: int, level: int, elapsed_seconds: float) -> void:
 	pending_score = score
 	pending_lines = lines
@@ -653,7 +670,9 @@ func _handle_leaderboard_pointer(event: InputEvent) -> bool:
 		_close_leaderboard_for_user()
 		return true
 	if _lb_restart_rect.size.x > 0.0 and _lb_restart_rect.has_point(point):
-		get_parent()._new_game()
+		var main := get_parent()
+		if main != null and main.has_method("_start_player_run"):
+			main._start_player_run()
 		return true
 	for target in _play_hit_targets:
 		var play_rect: Rect2 = target.rect
@@ -1323,6 +1342,8 @@ func _on_request_completed(
 ) -> void:
 	if is_instance_valid(http):
 		http.queue_free()
+	if kind == "session":
+		return
 	if kind == "submit" and generation != _submit_gen:
 		return
 	if kind == "leaderboard" and (

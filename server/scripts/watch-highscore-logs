@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Tail Neon Stack highscore logs in a short, human-readable form.
 
-Default: follow today's log from the end (like tail -f). Shows score submits,
-replays, rejects, and highscore board reads. Skips CORS OPTIONS and duplicate
-request/middleware noise.
+Default: follow today's log from the end (like tail -f). Shows session starts,
+score submits, replays, rejects, and highscore board reads. Skips CORS OPTIONS
+and duplicate request/middleware noise.
 
 Examples:
   watch-highscore-logs
@@ -53,7 +53,7 @@ def kv(line: str) -> dict[str, str]:
     fields = (
         "ClientIp", "ModeId", "PlayerName", "FinalScore", "Rank", "Checksum",
         "Error", "RejectionCount", "SuspectedFake", "Bytes", "ProjectedRank",
-        "HasReplay", "WindowMinutes", "Threshold", "Origin",
+        "HasReplay", "WindowMinutes", "Threshold", "Origin", "PlayerId",
     )
     out: dict[str, str] = {}
     for name in fields:
@@ -169,6 +169,8 @@ def format_line(line: str, verbose: bool) -> str | None:
             return None
         return f"{clock}  http   {method} {path_short} → {code}  {ip}"
 
+    if "POST /api/sessions request:" in line:
+        return None if not verbose else f"{clock}  req    sessions  {ip}  {ua}"
     if "POST /api/scores request:" in line or "POST /api/replays request:" in line:
         return None if not verbose else f"{clock}  req    scores/replays  {ip}  {ua}"
     if "GET /api/scores/" in line and ("request:" in line or "succeeded:" in line):
@@ -184,6 +186,19 @@ def format_line(line: str, verbose: bool) -> str | None:
     score = f.get("FinalScore", "")
     rank = f.get("Rank", "")
     err = f.get("Error", "")
+
+    if "POST /api/sessions succeeded" in line:
+        pid = f.get("PlayerId", "")
+        prefix = ""
+        if pid and pid != "(none)":
+            prefix = (pid[:6] + "…") if len(pid) > 6 else pid
+        bits = [name or "?", mode or "?", prefix, ip, ua]
+        return f"{clock}  {c('35', 'START ')} {'  '.join(x for x in bits if x)}"
+
+    if "POST /api/sessions rejected" in line:
+        mode_s = "" if not mode or mode == "(none)" else mode
+        bits = [name or "?", mode_s, ip, err or "rejected"]
+        return f"{clock}  {c('33', 'START ')} {'  '.join(x for x in bits if x)}"
 
     if "POST /api/scores succeeded" in line:
         return (
