@@ -4,6 +4,7 @@ extends Node
 
 const ReplayFormat = preload("res://game/replay/replay_format.gd")
 const PlayDevice = preload("res://game/platform/play_device.gd")
+const GameModes = preload("res://game/mode/game_modes.gd")
 
 var active := false
 var seed_value := 0
@@ -43,6 +44,7 @@ func export_dict(main: Node) -> Dictionary:
 	var arr := (
 		ReplayFormat.ARR_TOUCH if PlayDevice.is_touch_primary() else ReplayFormat.ARR_DESKTOP
 	)
+	var diff := str(main.get("difficulty"))
 	return ReplayFormat.build(
 		mode_id,
 		seed_value,
@@ -51,7 +53,8 @@ func export_dict(main: Node) -> Dictionary:
 		int(main.lines_cleared),
 		int(main.level),
 		float(main.elapsed_seconds),
-		arr
+		arr,
+		GameModes.max_level_for(diff)
 	)
 
 

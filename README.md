@@ -89,7 +89,7 @@ Pick difficulty and mode family from the mode menu (Esc).
 | Daily | Shared UTC calendar day | `daily-YYYY-MM-DD`, `…-mobile` |
 | Weekly | Shared ISO week (Monday UTC) | `weekly-YYYY-Www`, `…-mobile` |
 
-**Hardcore** prefixes those ids (`hardcore`, `hardcore-daily-…`, `hardcore-weekly-…`) and disables lock-delay resets. Classic difficulty keeps Infinity-style lock resets (capped in-engine). Desktop and touch-primary sessions use separate boards so phone and keyboard runs do not compete on the same list.
+**Hardcore** prefixes those ids (`hardcore`, `hardcore-daily-…`, `hardcore-weekly-…`), disables lock-delay resets, and raises the level cap from 15 to 21 so gravity keeps climbing to one cell per tick. Classic difficulty keeps Infinity-style lock resets and the level-15 cap. Desktop and touch-primary sessions use separate boards so phone and keyboard runs do not compete on the same list.
 
 ### Private challenges
 

@@ -8,6 +8,7 @@ public static class ScoreSubmissionHandler
     public static bool TryPrepare(
         ScoreSubmission submission,
         ILogger logger,
+        int levelCap,
         out ScoreSubmission normalized,
         out string error)
     {
@@ -54,7 +55,7 @@ public static class ScoreSubmissionHandler
             return false;
         }
 
-        var suspiciousReasons = ScorePlausibilityChecker.GetSuspiciousReasons(normalized);
+        var suspiciousReasons = ScorePlausibilityChecker.GetSuspiciousReasons(normalized, levelCap);
         if (suspiciousReasons.Count > 0)
         {
             logger.LogWarning(

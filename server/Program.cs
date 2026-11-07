@@ -201,7 +201,8 @@ app.MapPost("/api/scores", async (
         string.IsNullOrEmpty(referer) ? "(none)" : referer,
         string.IsNullOrEmpty(userAgent) ? "(none)" : userAgent);
 
-    if (!ScoreSubmissionHandler.TryPrepare(submission, logger, out var normalized, out var error))
+    var levelCap = await ResolveLevelCapAsync(submission.ModeId, challenges, cancellationToken);
+    if (!ScoreSubmissionHandler.TryPrepare(submission, logger, levelCap, out var normalized, out var error))
     {
         var isSuspectedFake = error.Contains("Checksum", StringComparison.OrdinalIgnoreCase);
         var rejectionCount = rejectionTracker.RecordRejection(clientIp);
@@ -411,3 +412,16 @@ app.MapGet("/api/replays/{checksum}", async (
 });
 
 app.Run();
+
+static async Task<int> ResolveLevelCapAsync(
+    string? modeId,
+    ChallengeStore challenges,
+    CancellationToken cancellationToken)
+{
+    var sanitized = ScoreSanitizer.SanitizeModeId(modeId);
+    if (!ChallengeStore.IsChallengeModeId(sanitized))
+        return ScoreSanitizer.LevelCapForModeId(sanitized);
+
+    var challenge = await challenges.TryGetAsync(sanitized, cancellationToken);
+    return ScoreSanitizer.LevelCapForDifficulty(challenge?.Difficulty);
+}

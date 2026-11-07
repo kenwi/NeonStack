@@ -24,6 +24,10 @@ const DIFFICULTY_LABELS := {
 	DIFFICULTY_HARDCORE: "Hardcore",
 }
 
+## Classic stays on the original cap. Hardcore follows the same gravity curve to 1 cell/tick.
+const MAX_LEVEL_CLASSIC := 15
+const MAX_LEVEL_HARDCORE := 21
+
 
 static func is_valid_family(game_mode: String) -> bool:
 	return game_mode == CLASSIC or game_mode == DAILY or game_mode == WEEKLY
@@ -35,6 +39,12 @@ static func is_valid_difficulty(difficulty: String) -> bool:
 
 static func lock_resets_enabled(difficulty: String) -> bool:
 	return difficulty != DIFFICULTY_HARDCORE
+
+
+static func max_level_for(difficulty: String) -> int:
+	if difficulty == DIFFICULTY_HARDCORE:
+		return MAX_LEVEL_HARDCORE
+	return MAX_LEVEL_CLASSIC
 
 
 static func utc_now_unix() -> int:
@@ -210,8 +220,8 @@ static func hint_for_family(game_mode: String) -> String:
 
 static func hint_for_difficulty(difficulty: String) -> String:
 	if difficulty == DIFFICULTY_HARDCORE:
-		return "Lock delay never resets on move or rotate."
-	return "Lock delay resets on move/rotate (Infinity-style, up to 15)."
+		return "Lock delay never resets. Speed climbs to one cell per tick at level 21."
+	return "Lock delay resets on move/rotate (Infinity-style, up to 15). Level caps at 15."
 
 
 static func hint_for_selection(game_mode: String, difficulty: String) -> String:

@@ -94,7 +94,7 @@ const SCORE_HELP_ROWS := [
 	["2 lines", "300 × level"],
 	["3 lines", "500 × level"],
 	["4 lines", "800 × level"],
-	["Level up", "Every 10 lines (max 15)"],
+	["Level up", "Every 10 lines (classic 15, hardcore 21)"],
 	["Holding a piece", "No points"],
 ]
 
@@ -545,6 +545,16 @@ func _challenge_friends_unlocked() -> bool:
 	return true
 
 
+func _debug_step_level(delta: int) -> void:
+	var cap := _max_level()
+	level = clampi(level + delta, 1, cap)
+	# The next line clear derives level from lines. Keep them aligned so the step sticks.
+	lines_cleared = (level - 1) * 10
+	if music != null and music.has_method("show_status"):
+		music.show_status("Level %d" % level)
+	queue_redraw()
+
+
 func _debug_tools_unlocked() -> bool:
 	## Editor, or web with ?debug=1|true|yes (F1/F2, FPS).
 	if OS.has_feature("editor"):
@@ -576,6 +586,12 @@ func _handle_editor_debug_keys(event: InputEvent) -> bool:
 		else:
 			_editor_debug_lines = PackedStringArray()
 		queue_redraw()
+		return true
+	if OS.has_feature("editor") and not replay_mode and _key_pressed(event, KEY_PAGEUP):
+		_debug_step_level(1)
+		return true
+	if OS.has_feature("editor") and not replay_mode and _key_pressed(event, KEY_PAGEDOWN):
+		_debug_step_level(-1)
 		return true
 	if _key_pressed(event, KEY_F2):
 		_editor_clear_player_data()
@@ -1192,7 +1208,7 @@ func _finish_line_clear() -> void:
 	var points: int = int(SCORE_TABLE[cleared]) * level
 	score += points
 	var previous_level := level
-	level = mini(15, 1 + int(lines_cleared / 10.0))
+	level = mini(_max_level(), 1 + int(lines_cleared / 10.0))
 	if juice != null:
 		juice.line_clear_scored(cleared, points, _board_center())
 		juice.note_score(score, _board_center())
@@ -1810,8 +1826,17 @@ func _ghost_y() -> int:
 	return y
 
 
+func _max_level() -> int:
+	return GameModes.max_level_for(difficulty)
+
+
 func _drop_interval() -> float:
-	return maxf(0.05, 0.85 * pow(0.82, level - 1))
+	var raw := 0.85 * pow(0.82, level - 1)
+	# Cap 15 keeps the original floor so classic replays stay bit-exact.
+	# That floor never binds at level 15; hardcore skips it so 16+ still gets faster.
+	if _max_level() <= GameModes.MAX_LEVEL_CLASSIC:
+		return maxf(0.05, raw)
+	return raw
 
 
 func _highscores_open() -> bool:
@@ -2018,6 +2043,9 @@ func has_replay_recording() -> bool:
 func start_replay_from_data(data: Dictionary) -> bool:
 	if replay_player == null or not replay_player.load_replay(data):
 		return false
+	var replay_mode_id := str(data.get("modeId", ""))
+	if not replay_mode_id.is_empty():
+		configure_run_from_board_id(replay_mode_id)
 	replay_mode = true
 	replay_status = "Playing replay"
 	replay_speed = 1.0
@@ -2680,7 +2708,8 @@ func _input(event: InputEvent) -> void:
 		return
 	# Desktop native only: cycle level for backdrop / gravity tuning.
 	if not OS.has_feature("web") and _key_pressed(event, KEY_1):
-		level = 1 if level >= 15 else level + 1
+		var cap := _max_level()
+		level = 1 if level >= cap else level + 1
 		if music != null and music.has_method("show_status"):
 			music.show_status("Level %d" % level)
 		queue_redraw()
@@ -3529,9 +3558,11 @@ func _layout_mode_select(vp: Vector2) -> Dictionary:
 	)
 	if challenge_on:
 		var cdata: Dictionary = challenges.active_data()
-		hint_text = "Private board · %s · %s" % [
-			str(GameModes.DIFFICULTY_LABELS.get(str(cdata.get("difficulty", "")), "")),
+		var challenge_diff := str(cdata.get("difficulty", GameModes.DIFFICULTY_CLASSIC))
+		hint_text = "Private board · %s · %s. %s" % [
+			str(GameModes.DIFFICULTY_LABELS.get(challenge_diff, "")),
 			str(GameModes.FAMILY_LABELS.get(str(cdata.get("family", "")), "")),
+			GameModes.hint_for_difficulty(challenge_diff),
 		]
 	var hint_lines := _wrap_text_lines(hint_text, body_font, hint_size_local, hint_max_w)
 	var hint_block_h := line_h * float(maxi(1, hint_lines.size()))

@@ -20,7 +20,8 @@ static func build(
 	lines_cleared: int,
 	level: int,
 	elapsed_seconds: float,
-	arr_interval: float = ARR_DESKTOP
+	arr_interval: float = ARR_DESKTOP,
+	max_level: int = GameModes.MAX_LEVEL_CLASSIC
 ) -> Dictionary:
 	return {
 		"v": VERSION,
@@ -33,7 +34,15 @@ static func build(
 		"linesCleared": lines_cleared,
 		"level": level,
 		"elapsedSeconds": elapsed_seconds,
+		"maxLevel": max_level,
 	}
+
+
+## Old replays omit maxLevel and were recorded at the classic cap.
+static func recorded_max_level(data: Dictionary) -> int:
+	if not data.has("maxLevel"):
+		return GameModes.MAX_LEVEL_CLASSIC
+	return int(data.get("maxLevel", GameModes.MAX_LEVEL_CLASSIC))
 
 
 ## Touch ARR shipped 2026-10-31 ~13:55 +01:00; older mobile replays used desktop ARR.

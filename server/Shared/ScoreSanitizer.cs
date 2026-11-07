@@ -12,7 +12,10 @@ public static partial class ScoreSanitizer
     public const int MaxScore = 10_000_000;
     public const int MaxLines = 10_000;
     public const int MinLevel = 1;
-    public const int MaxLevel = 15;
+    public const int MaxLevelClassic = 15;
+    public const int MaxLevelHardcore = 21;
+    /// <summary>Highest level any board accepts. Classic boards still expect <see cref="MaxLevelClassic"/>.</summary>
+    public const int MaxLevel = MaxLevelHardcore;
     public const float MaxElapsedSeconds = 86_400f;
 
     // Keep in sync with game/highscore/highscore_checksum.gd.
@@ -50,6 +53,28 @@ public static partial class ScoreSanitizer
             trimmed = trimmed[..MaxModeIdLength];
 
         return InvalidModeIdChars().Replace(trimmed, string.Empty);
+    }
+
+    public static int LevelCapForDifficulty(string? difficulty) =>
+        string.Equals(difficulty, "hardcore", StringComparison.OrdinalIgnoreCase)
+            ? MaxLevelHardcore
+            : MaxLevelClassic;
+
+    /// <summary>
+    /// Cap for a public board id. Challenge ids do not carry difficulty; callers resolve those separately.
+    /// </summary>
+    public static int LevelCapForModeId(string? modeId)
+    {
+        if (string.IsNullOrEmpty(modeId))
+            return MaxLevelClassic;
+
+        var core = modeId.EndsWith("-mobile", StringComparison.OrdinalIgnoreCase)
+            ? modeId[..^"-mobile".Length]
+            : modeId;
+        if (core.Equals("hardcore", StringComparison.OrdinalIgnoreCase)
+            || core.StartsWith("hardcore-", StringComparison.OrdinalIgnoreCase))
+            return MaxLevelHardcore;
+        return MaxLevelClassic;
     }
 
     public static string SanitizePlayerId(string? playerId)

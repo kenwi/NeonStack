@@ -11,18 +11,20 @@ public static class ScorePlausibilityChecker
     private const int SoftDropBudgetPerLine = 400;
     private static readonly int[] LineClearPoints = [0, 100, 300, 500, 800];
 
-    public static IReadOnlyList<string> GetSuspiciousReasons(ScoreSubmission submission)
+    public static IReadOnlyList<string> GetSuspiciousReasons(ScoreSubmission submission, int levelCap)
     {
+        var cap = Math.Clamp(levelCap, ScoreSanitizer.MinLevel, ScoreSanitizer.MaxLevel);
         var reasons = new List<string>();
+        var expected = ExpectedLevel(submission.LinesCleared, cap);
 
-        if (submission.Level != ExpectedLevel(submission.LinesCleared))
+        if (submission.Level != expected)
         {
             reasons.Add(
                 $"Level {submission.Level} does not match lines-cleared formula " +
-                $"(expected {ExpectedLevel(submission.LinesCleared)} for {submission.LinesCleared} lines).");
+                $"(expected {expected} for {submission.LinesCleared} lines at cap {cap}).");
         }
 
-        var maxFromLines = MaxPlausibleScore(submission.LinesCleared);
+        var maxFromLines = MaxPlausibleScore(submission.LinesCleared, cap);
         if (submission.FinalScore > maxFromLines)
         {
             reasons.Add(
@@ -46,14 +48,14 @@ public static class ScorePlausibilityChecker
         return reasons;
     }
 
-    private static int ExpectedLevel(int linesCleared) =>
-        Math.Min(ScoreSanitizer.MaxLevel, 1 + linesCleared / 10);
+    private static int ExpectedLevel(int linesCleared, int levelCap) =>
+        Math.Min(levelCap, 1 + linesCleared / 10);
 
     /// <summary>
     /// Upper bound assuming every line clear was a Tetris at the highest reachable level,
     /// plus soft/hard drop budget.
     /// </summary>
-    private static int MaxPlausibleScore(int linesCleared)
+    private static int MaxPlausibleScore(int linesCleared, int levelCap)
     {
         if (linesCleared <= 0)
             return SoftDropBudgetPerLine;
@@ -65,7 +67,7 @@ public static class ScorePlausibilityChecker
         while (remaining > 0)
         {
             var chunk = Math.Min(4, remaining);
-            var level = ExpectedLevel(clearedSoFar);
+            var level = ExpectedLevel(clearedSoFar, levelCap);
             score += LineClearPoints[chunk] * level;
             clearedSoFar += chunk;
             remaining -= chunk;

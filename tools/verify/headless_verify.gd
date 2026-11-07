@@ -18,11 +18,13 @@ extends SceneTree
 const PlayDevice = preload("res://game/platform/play_device.gd")
 const HighscoreChecksum = preload("res://game/highscore/highscore_checksum.gd")
 const ReplayFormat = preload("res://game/replay/replay_format.gd")
+const GameModes = preload("res://game/mode/game_modes.gd")
 const ELAPSED_TOLERANCE := 0.02
 const MAIN_SCENE := "res://game/main.tscn"
 
 var _exit_code := 1
 var _main: Node = null
+var _highscores_path := ""
 var _replays_dir := ""
 var _replays_only := false
 var _jobs: Array = []
@@ -41,6 +43,7 @@ func _initialize() -> void:
 		return
 
 	var highscores_path := str(args["highscores"])
+	_highscores_path = highscores_path
 	_replays_dir = str(args["replays"])
 	_replays_only = bool(args.get("replays_only", false))
 	var checksum_arg := str(args.get("checksum", "")).strip_edges()
@@ -175,6 +178,15 @@ func _verify_job(job: Dictionary) -> void:
 
 	PlayDevice.force_from_board_id(mode_id)
 	_main.configure_run_from_board_id(mode_id)
+	_apply_challenge_difficulty(mode_id)
+	var cap := GameModes.max_level_for(str(_main.difficulty))
+	var recorded_cap := ReplayFormat.recorded_max_level(replay_data)
+	if recorded_cap != cap:
+		_record_fail(
+			"%s | maxLevel %s disagrees with %s cap %s"
+			% [label, recorded_cap, str(_main.difficulty), cap]
+		)
+		return
 	if not _main.start_replay_from_data(replay_data):
 		_record_fail("%s | failed to start replay" % label)
 		return
@@ -231,6 +243,44 @@ func _verify_job(job: Dictionary) -> void:
 	if not checksum_ok:
 		rows.append(["checksum", recomputed, stored_checksum, true])
 	_record_fail_table(label, rows)
+
+
+func _apply_challenge_difficulty(mode_id: String) -> void:
+	if not GameModes.is_challenge_board(mode_id):
+		return
+	var diff := _challenge_difficulty(mode_id)
+	if not GameModes.is_valid_difficulty(diff):
+		diff = GameModes.DIFFICULTY_CLASSIC
+	_main.difficulty = diff
+
+
+func _challenge_difficulty(mode_id: String) -> String:
+	var token := mode_id.trim_suffix("-mobile")
+	if token.begins_with("c_"):
+		token = token.substr(2)
+	if token.length() > 12:
+		token = token.substr(0, 12)
+	if token.is_empty():
+		return ""
+	var directory := _highscores_path.get_base_dir()
+	var names: PackedStringArray = PackedStringArray()
+	if _highscores_path.get_file().contains("dev"):
+		names.append("challenges-dev.json")
+	names.append("challenges.json")
+	if not names.has("challenges-dev.json"):
+		names.append("challenges-dev.json")
+	for file_name in names:
+		var parsed = JSON.parse_string(_read_text(directory.path_join(file_name)))
+		if typeof(parsed) != TYPE_DICTIONARY:
+			continue
+		var boards = (parsed as Dictionary).get("Boards", {})
+		if typeof(boards) != TYPE_DICTIONARY or not (boards as Dictionary).has(token):
+			continue
+		var entry = (boards as Dictionary).get(token)
+		if typeof(entry) != TYPE_DICTIONARY:
+			continue
+		return str((entry as Dictionary).get("Difficulty", (entry as Dictionary).get("difficulty", ""))).to_lower()
+	return ""
 
 
 func _ansi_enabled() -> bool:
