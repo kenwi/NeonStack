@@ -184,8 +184,15 @@ var _hard_drop_hint_seen := false
 var _hard_drop_used := false
 var _hard_drop_hint_open := false
 var _hard_drop_hint_resume_rect := Rect2()
-## One-time "Challenge Friends" feature announcement.
-var _feature_announce_seen := false
+## One-time feature announcements. Stored in user://ui.cfg (IndexedDB in the browser).
+## challenge_friends stays in the file but is not shown. hardcore_level_21 is the live one.
+const ANNOUNCE_CHALLENGE_FRIENDS := "challenge_friends"
+const ANNOUNCE_HARDCORE_LEVEL := "hardcore_level_21"
+var _announce_seen := {
+	"challenge_friends": false,
+	"hardcore_level_21": false,
+}
+var _feature_announce_id := ""
 var _feature_announce_open := false
 var _feature_announce_ok_rect := Rect2()
 
@@ -326,7 +333,8 @@ func _ready() -> void:
 	_feature_announce_open = false
 	mode_select_open = true
 	game_mode = ""
-	if _should_show_feature_announce():
+	_feature_announce_id = _pending_feature_announce()
+	if not _feature_announce_id.is_empty():
 		_feature_announce_open = true
 		mode_select_open = false
 	if challenges != null and challenges.is_active():
@@ -630,8 +638,12 @@ func _build_editor_debug_dump() -> PackedStringArray:
 		% [str(_hard_drop_hint_seen), str(_hard_drop_used)]
 	)
 	lines.append(
-		"feature_announce_seen: %s  open: %s"
-		% [str(_feature_announce_seen), str(_feature_announce_open)]
+		"feature_announce: challenge_friends=%s hardcore_level_21=%s open=%s"
+		% [
+			str(bool(_announce_seen.get(ANNOUNCE_CHALLENGE_FRIENDS, false))),
+			str(bool(_announce_seen.get(ANNOUNCE_HARDCORE_LEVEL, false))),
+			str(_feature_announce_open),
+		]
 	)
 	if _challenge_active():
 		var data: Dictionary = challenges.active_data()
@@ -688,7 +700,9 @@ func _editor_clear_player_data() -> void:
 	_hard_drop_used = false
 	_save_hard_drop_hint_prefs()
 	_feature_announce_open = false
-	_feature_announce_seen = false
+	_feature_announce_id = ""
+	_announce_seen[ANNOUNCE_CHALLENGE_FRIENDS] = false
+	_announce_seen[ANNOUNCE_HARDCORE_LEVEL] = false
 	_save_feature_announce_prefs()
 	queue_redraw()
 
@@ -1314,23 +1328,50 @@ func _dismiss_hard_drop_hint() -> void:
 	queue_redraw()
 
 
+func _challenge_friends_announce_enabled() -> bool:
+	## Private-board announcement is kept, but not shown.
+	return false
+
+
 func _load_feature_announce_prefs() -> void:
-	_feature_announce_seen = false
+	_announce_seen[ANNOUNCE_CHALLENGE_FRIENDS] = false
+	_announce_seen[ANNOUNCE_HARDCORE_LEVEL] = false
 	var cfg := ConfigFile.new()
 	if cfg.load(UI_CONFIG_PATH) != OK:
 		return
-	_feature_announce_seen = bool(cfg.get_value("announcements", "challenge_friends", false))
+	_announce_seen[ANNOUNCE_CHALLENGE_FRIENDS] = bool(
+		cfg.get_value("announcements", ANNOUNCE_CHALLENGE_FRIENDS, false)
+	)
+	_announce_seen[ANNOUNCE_HARDCORE_LEVEL] = bool(
+		cfg.get_value("announcements", ANNOUNCE_HARDCORE_LEVEL, false)
+	)
 
 
 func _save_feature_announce_prefs() -> void:
 	var cfg := ConfigFile.new()
 	cfg.load(UI_CONFIG_PATH)
-	cfg.set_value("announcements", "challenge_friends", _feature_announce_seen)
+	cfg.set_value(
+		"announcements",
+		ANNOUNCE_CHALLENGE_FRIENDS,
+		bool(_announce_seen.get(ANNOUNCE_CHALLENGE_FRIENDS, false))
+	)
+	cfg.set_value(
+		"announcements",
+		ANNOUNCE_HARDCORE_LEVEL,
+		bool(_announce_seen.get(ANNOUNCE_HARDCORE_LEVEL, false))
+	)
 	cfg.save(UI_CONFIG_PATH)
 
 
-func _should_show_feature_announce() -> bool:
-	return not _feature_announce_seen
+func _pending_feature_announce() -> String:
+	if (
+		_challenge_friends_announce_enabled()
+		and not bool(_announce_seen.get(ANNOUNCE_CHALLENGE_FRIENDS, false))
+	):
+		return ANNOUNCE_CHALLENGE_FRIENDS
+	if not bool(_announce_seen.get(ANNOUNCE_HARDCORE_LEVEL, false)):
+		return ANNOUNCE_HARDCORE_LEVEL
+	return ""
 
 
 func _dismiss_feature_announce() -> void:
@@ -1338,9 +1379,10 @@ func _dismiss_feature_announce() -> void:
 		return
 	_feature_announce_open = false
 	_feature_announce_ok_rect = Rect2()
-	if not _feature_announce_seen:
-		_feature_announce_seen = true
+	if not _feature_announce_id.is_empty() and not bool(_announce_seen.get(_feature_announce_id, false)):
+		_announce_seen[_feature_announce_id] = true
 		_save_feature_announce_prefs()
+	_feature_announce_id = ""
 	mode_select_open = true
 	_sync_hold_flags_from_input()
 	queue_redraw()
@@ -1370,11 +1412,23 @@ func _handle_feature_announce_input(event: InputEvent) -> bool:
 	return true
 
 
+func _feature_announce_title() -> String:
+	if _feature_announce_id == ANNOUNCE_CHALLENGE_FRIENDS:
+		return "NEW FEATURE"
+	return "HARDCORE"
+
+
 func _feature_announce_paragraphs() -> PackedStringArray:
+	if _feature_announce_id == ANNOUNCE_CHALLENGE_FRIENDS:
+		return PackedStringArray([
+			"Challenge your friends with a private board.",
+			"Create a challenge, share the invite link, and compete on the same rules and difficulty.",
+			"Open it from the game mode screen with CHALLENGE YOUR FRIENDS.",
+		])
 	return PackedStringArray([
-		"Challenge your friends with a private board.",
-		"Create a challenge, share the invite link, and compete on the same rules and difficulty.",
-		"Open it from the game mode screen with CHALLENGE YOUR FRIENDS.",
+		"Hardcore difficulty now reaches level 21.",
+		"Gravity keeps climbing until one cell per tick, then holds.",
+		"Classic is unchanged and still caps at level 15.",
 	])
 
 
@@ -1471,7 +1525,7 @@ func _draw_feature_announce(vp: Vector2) -> void:
 	var title_y := panel.position.y + pad_top + title_font.get_ascent(title_size_local)
 	_draw_centered_label(
 		mid,
-		"NEW FEATURE",
+		_feature_announce_title(),
 		title_font,
 		title_size_local,
 		ColorTheme.accent(),
