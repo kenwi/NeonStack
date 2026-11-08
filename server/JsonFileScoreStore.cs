@@ -5,14 +5,21 @@ using Tetris.Highscores.Shared;
 namespace Tetris.Highscores.Server;
 
 /// <summary>Outcome of a score submission. Rank is 1-based within the mode's leaderboard.</summary>
-public sealed record ScoreAddResult(bool Accepted, int Rank, int TotalEntriesForMode)
+public sealed record ScoreAddResult(bool Accepted, int Rank, int TotalEntriesForMode, string Error = "")
 {
-    public static readonly ScoreAddResult Duplicate = new(false, 0, 0);
+    public static readonly ScoreAddResult Duplicate = new(false, 0, 0, "This score has already been submitted.");
+
+    public static ScoreAddResult Rejected(string error) => new(false, 0, 0, error);
+
+    public bool IsDuplicate =>
+        !Accepted && Error.Contains("already been submitted", StringComparison.OrdinalIgnoreCase);
 }
 
 public sealed class JsonFileScoreStore
 {
     public const int MaxReplayBytes = 1_048_576;
+    /// <summary>A score that lands at this rank or better must include a replay.</summary>
+    public const int ReplayRequiredRank = 10;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -38,7 +45,10 @@ public sealed class JsonFileScoreStore
             Path.GetFullPath(_replayDir));
     }
 
-    public async Task<ScoreAddResult> TryAddScoreAsync(ScoreSubmission submission, CancellationToken cancellationToken = default)
+    public async Task<ScoreAddResult> TryAddScoreAsync(
+        ScoreSubmission submission,
+        string? replayJson = null,
+        CancellationToken cancellationToken = default)
     {
         await _lock.WaitAsync(cancellationToken);
         try
@@ -77,14 +87,40 @@ public sealed class JsonFileScoreStore
                 Checksum = checksum,
                 HasReplay = false
             };
-            entries.Add(newEntry);
+            var rank = ProjectedRank(entries, newEntry);
+            var replayRequired = rank <= ReplayRequiredRank;
+            if (replayRequired && string.IsNullOrWhiteSpace(replayJson))
+            {
+                _logger.LogWarning(
+                    "Score rejected (top {RankLimit} requires a replay): ModeId={ModeId}, PlayerName={PlayerName}, " +
+                    "FinalScore={FinalScore}, ProjectedRank={Rank}",
+                    ReplayRequiredRank,
+                    submission.ModeId,
+                    submission.PlayerName,
+                    submission.FinalScore,
+                    rank);
+                return ScoreAddResult.Rejected("Top 10 scores require a replay.");
+            }
 
-            var rank = entries
-                .OrderByDescending(e => e.FinalScore)
-                .ThenBy(e => e.ElapsedSeconds)
-                .ThenBy(e => e.SubmittedAt)
-                .ToList()
-                .FindIndex(e => ReferenceEquals(e, newEntry)) + 1;
+            if (!string.IsNullOrWhiteSpace(replayJson))
+            {
+                if (!TryPrepareReplay(replayJson, newEntry, out var replayError))
+                {
+                    _logger.LogWarning(
+                        "Score rejected (replay): ModeId={ModeId}, PlayerName={PlayerName}, FinalScore={FinalScore}, Error={Error}",
+                        submission.ModeId,
+                        submission.PlayerName,
+                        submission.FinalScore,
+                        replayError);
+                    return ScoreAddResult.Rejected(replayError);
+                }
+
+                Directory.CreateDirectory(_replayDir);
+                await File.WriteAllTextAsync(ReplayPath(checksum), replayJson, cancellationToken);
+                newEntry.HasReplay = true;
+            }
+
+            entries.Add(newEntry);
 
             _logger.LogInformation(
                 "Score persisted: ModeId={ModeId}, PlayerName={PlayerName}, FinalScore={FinalScore}, " +
@@ -165,12 +201,8 @@ public sealed class JsonFileScoreStore
         if (string.IsNullOrWhiteSpace(replayJson))
             return (false, "Replay body is required.");
 
-        var byteCount = System.Text.Encoding.UTF8.GetByteCount(replayJson);
-        if (byteCount > MaxReplayBytes)
-            return (false, "Replay exceeds size limit.");
-
-        if (!TryValidateReplaySchema(replayJson, out var schemaError))
-            return (false, schemaError);
+        if (!TryPrepareReplay(replayJson, null, out var prepareError))
+            return (false, prepareError);
 
         await _lock.WaitAsync(cancellationToken);
         try
@@ -188,6 +220,7 @@ public sealed class JsonFileScoreStore
             if (!TryMatchReplayOutcome(replayJson, match, out var outcomeError))
                 return (false, outcomeError);
 
+            var byteCount = System.Text.Encoding.UTF8.GetByteCount(replayJson);
             Directory.CreateDirectory(_replayDir);
             var path = ReplayPath(checksum);
             await File.WriteAllTextAsync(path, replayJson, cancellationToken);
@@ -233,6 +266,56 @@ public sealed class JsonFileScoreStore
         if (string.IsNullOrEmpty(safe))
             safe = "invalid";
         return Path.Combine(_replayDir, $"{safe}.json");
+    }
+
+    private static bool TryPrepareReplay(string replayJson, StoredScoreEntry? entry, out string error)
+    {
+        error = string.Empty;
+        if (string.IsNullOrWhiteSpace(replayJson))
+        {
+            error = "Replay body is required.";
+            return false;
+        }
+
+        var byteCount = System.Text.Encoding.UTF8.GetByteCount(replayJson);
+        if (byteCount > MaxReplayBytes)
+        {
+            error = "Replay exceeds size limit.";
+            return false;
+        }
+
+        if (!TryValidateReplaySchema(replayJson, out error))
+            return false;
+        if (entry != null && !TryMatchReplayOutcome(replayJson, entry, out error))
+            return false;
+        return true;
+    }
+
+    /// <summary>
+    /// 1-based rank the candidate would take. Higher score wins. Equal score prefers the shorter run,
+    /// then the earlier submit.
+    /// </summary>
+    private static int ProjectedRank(IReadOnlyList<StoredScoreEntry> entries, StoredScoreEntry candidate)
+    {
+        var rank = 1;
+        foreach (var existing in entries)
+        {
+            if (Beats(existing, candidate))
+                rank++;
+        }
+
+        return rank;
+    }
+
+    private static bool Beats(StoredScoreEntry existing, StoredScoreEntry candidate)
+    {
+        if (existing.FinalScore != candidate.FinalScore)
+            return existing.FinalScore > candidate.FinalScore;
+        if (existing.ElapsedSeconds < candidate.ElapsedSeconds)
+            return true;
+        if (existing.ElapsedSeconds > candidate.ElapsedSeconds)
+            return false;
+        return existing.SubmittedAt <= candidate.SubmittedAt;
     }
 
     private static bool TryValidateReplaySchema(string replayJson, out string error)

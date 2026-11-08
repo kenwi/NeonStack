@@ -25,6 +25,8 @@ var pending_level := 1
 var pending_elapsed := 0.0
 var pending_checksum := ""
 var include_replay := true
+## True when the score POST already carried the replay, so the follow-up upload is skipped.
+var _replay_included_in_submit := false
 var submitted_this_run := false
 var leaderboard_open := false
 var leaderboard_page := 0
@@ -66,6 +68,7 @@ var _lb_restart_rect := Rect2()
 var _submit_rect := Rect2()
 var _skip_rect := Rect2()
 var _replay_toggle_rect := Rect2()
+var _replay_hint_pos := Vector2.ZERO
 var _name_field_rect := Rect2()
 var _play_hit_targets: Array = []
 var _page_hit_targets: Array = []
@@ -225,6 +228,7 @@ func reset_run() -> void:
 	pending_elapsed = 0.0
 	pending_checksum = ""
 	include_replay = true
+	_replay_included_in_submit = false
 	view_mode_id = submit_mode_id
 	_sync_view_from_board_id(view_mode_id)
 	_submit_gen += 1
@@ -261,6 +265,7 @@ func begin_game_over(score: int, lines: int, level: int, elapsed_seconds: float)
 	pending_elapsed = maxf(0.001, elapsed_seconds)
 	pending_checksum = ""
 	include_replay = true
+	_replay_included_in_submit = false
 	submitted_rank = -1
 	status_text = ""
 	leaderboard_open = false
@@ -547,8 +552,9 @@ func _handle_name_entry(event: InputEvent) -> bool:
 		_layout_name_targets(get_viewport_rect().size)
 		var point := PlayDevice.pointer_down_position(event)
 		if _replay_toggle_rect.size.x > 0.0 and _replay_toggle_rect.has_point(point):
-			include_replay = not include_replay
-			queue_redraw()
+			if not _replay_required():
+				include_replay = not include_replay
+				queue_redraw()
 			return true
 		if _submit_rect.size.x > 0.0 and _submit_rect.has_point(point):
 			_submit_score()
@@ -605,8 +611,9 @@ func _handle_touch_name_entry(event: InputEvent) -> bool:
 		_layout_name_targets(get_viewport_rect().size)
 		var point := PlayDevice.pointer_down_position(event)
 		if _replay_toggle_rect.size.x > 0.0 and _replay_toggle_rect.has_point(point):
-			include_replay = not include_replay
-			queue_redraw()
+			if not _replay_required():
+				include_replay = not include_replay
+				queue_redraw()
 			return true
 		if _submit_rect.has_point(point):
 			_submit_score()
@@ -740,6 +747,14 @@ func _draw_name_panel(vp: Vector2) -> void:
 		ColorTheme.text()
 	)
 	_draw_replay_toggle_row(body_size)
+	if _replay_required():
+		_draw_centered(
+			_body_font,
+			_replay_hint_pos,
+			"Top 10 scores require a replay.",
+			hint_size,
+			ColorTheme.gold()
+		)
 	if touch_ui and phase == Phase.NAME_ENTRY:
 		_draw_name_field_chrome(_name_field_rect, true)
 		_draw_choice(_submit_rect, "SUBMIT", true)
@@ -793,6 +808,9 @@ func _draw_name_panel(vp: Vector2) -> void:
 func _draw_replay_toggle_row(label_size: int) -> void:
 	if _replay_toggle_rect.size.x <= 0.0:
 		return
+	var locked := _replay_required()
+	if locked:
+		include_replay = true
 	var label := "Send replay"
 	var label_w := _body_font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, label_size).x
 	var label_x := _replay_toggle_rect.position.x - 10.0 * _ui_scale - label_w
@@ -812,7 +830,9 @@ func _draw_replay_toggle_row(label_size: int) -> void:
 	_draw_choice(
 		_replay_toggle_rect,
 		"YES" if include_replay else "NO",
-		include_replay
+		include_replay and not locked,
+		14,
+		locked
 	)
 
 
@@ -1220,7 +1240,12 @@ func _submit_score() -> void:
 	submitted_this_run = true
 	queue_redraw()
 
+	if _replay_required():
+		include_replay = true
 	var body := JSON.stringify(payload)
+	_replay_included_in_submit = false
+	if include_replay:
+		body = _embed_replay(body)
 	var headers := PackedStringArray(["Content-Type: application/json"])
 	var url := "%s/api/scores" % HighscoreConfig.API_BASE_URL.trim_suffix("/")
 	var err := _send("submit", url, headers, HTTPClient.METHOD_POST, body, mode_id, _submit_gen)
@@ -1231,7 +1256,36 @@ func _submit_score() -> void:
 		queue_redraw()
 
 
+## True when this score would land in the top 10, matching the server rule.
+func _replay_required() -> bool:
+	if pending_score <= 0:
+		return false
+	var cutoff := HighscoreConfig.LIVE_RANK_TOP_COUNT
+	if live_top_scores.size() < cutoff:
+		return true
+	return pending_score >= live_top_scores[cutoff - 1]
+
+
+func _embed_replay(body: String) -> String:
+	var main := get_parent()
+	if main == null or not main.has_method("get_replay_json") or not body.ends_with("}"):
+		return body
+	var replay_json: String = main.get_replay_json()
+	if replay_json.is_empty() or not ReplayFormat.fits_size_limit(replay_json):
+		return body
+	var replay_data := ReplayFormat.parse(replay_json)
+	if replay_data.is_empty() or not ReplayFormat.is_valid(replay_data):
+		return body
+	# Keep the recorder JSON verbatim. Re-stringifying turns ints into floats.
+	_replay_included_in_submit = true
+	return body.substr(0, body.length() - 1) + ',"replay":' + replay_json + "}"
+
+
 func _maybe_upload_replay_after_score() -> void:
+	if _replay_included_in_submit:
+		phase = Phase.LEADERBOARD
+		_fetch_leaderboard()
+		return
 	if not include_replay:
 		phase = Phase.LEADERBOARD
 		_fetch_leaderboard()
@@ -1368,7 +1422,7 @@ func _on_request_completed(
 			phase = Phase.LEADERBOARD
 			_fetch_leaderboard()
 		else:
-			status_text = "Submit failed"
+			status_text = _submit_error_text(text)
 			phase = Phase.LEADERBOARD
 			_fetch_leaderboard()
 		queue_redraw()
@@ -1432,6 +1486,10 @@ func _on_request_completed(
 					live_top_scores.append(int(entry.get("finalScore", 0)))
 					if live_top_scores.size() >= HighscoreConfig.LIVE_RANK_TOP_COUNT:
 						break
+		if phase == Phase.NAME_ENTRY and _replay_required():
+			include_replay = true
+		if phase == Phase.NAME_ENTRY or phase == Phase.SUBMITTING:
+			queue_redraw()
 		return
 
 
@@ -1470,9 +1528,10 @@ func _layout_name_targets(vp: Vector2) -> Rect2:
 		).x
 	else:
 		label_w = 110.0
+	var hint_extra := 36.0 * ui_scale if _replay_required() else 0.0
 	if not touch_ui:
 		var desktop_w := minf(420.0 * ui_scale, vp.x - 40.0)
-		var desktop_h := 340.0 * ui_scale
+		var desktop_h := 340.0 * ui_scale + hint_extra
 		panel = Rect2(
 			(vp.x - desktop_w) * 0.5,
 			(vp.y - desktop_h) * 0.5 + 36.0 * ui_scale,
@@ -1496,6 +1555,10 @@ func _layout_name_targets(vp: Vector2) -> Rect2:
 			toggle_w,
 			toggle_h
 		)
+		_replay_hint_pos = Vector2(
+			panel.get_center().x,
+			_replay_toggle_rect.end.y + 28.0 * ui_scale
+		)
 		gap = 8.0 * ui_scale
 		button_h = 40.0 * ui_scale
 		button_w = (panel.size.x - 40.0 * ui_scale - gap) * 0.5
@@ -1504,7 +1567,7 @@ func _layout_name_targets(vp: Vector2) -> Rect2:
 		_submit_rect = Rect2(_skip_rect.end.x + gap, button_y, button_w, button_h)
 		return panel
 	var panel_w := minf(maxf(420.0 * ui_scale, 300.0), vp.x - 16.0)
-	var panel_h := minf(maxf(300.0, 260.0 * ui_scale), vp.y - 16.0)
+	var panel_h := minf(maxf(300.0, 260.0 * ui_scale) + hint_extra, vp.y - 16.0)
 	panel = Rect2((vp.x - panel_w) * 0.5, maxf(8.0, (vp.y - panel_h) * 0.35), panel_w, panel_h)
 	gap = 8.0
 	button_h = 44.0
@@ -1512,7 +1575,12 @@ func _layout_name_targets(vp: Vector2) -> Rect2:
 	button_y = panel.end.y - button_h - 12.0
 	_skip_rect = Rect2(panel.position.x + 12.0, button_y, button_w, button_h)
 	_submit_rect = Rect2(_skip_rect.end.x + gap, button_y, button_w, button_h)
-	_name_field_rect = Rect2(panel.position.x + 20.0, button_y - 112.0, panel.size.x - 40.0, 44.0)
+	_name_field_rect = Rect2(
+		panel.position.x + 20.0,
+		button_y - 112.0 - hint_extra,
+		panel.size.x - 40.0,
+		44.0
+	)
 	toggle_w = 72.0
 	row_w = label_w + 10.0 + toggle_w
 	row_x = panel.get_center().x - row_w * 0.5
@@ -1522,7 +1590,17 @@ func _layout_name_targets(vp: Vector2) -> Rect2:
 		toggle_w,
 		40.0
 	)
+	_replay_hint_pos = Vector2(panel.get_center().x, _replay_toggle_rect.end.y + 22.0)
 	return panel
+
+
+func _submit_error_text(text: String) -> String:
+	var parsed = JSON.parse_string(text)
+	if typeof(parsed) == TYPE_DICTIONARY:
+		var message := str(parsed.get("error", "")).strip_edges()
+		if not message.is_empty():
+			return message
+	return "Submit failed"
 
 
 func _draw_name_field_chrome(field: Rect2, active: bool) -> void:
@@ -1621,16 +1699,17 @@ func _layout_leaderboard(vp: Vector2) -> Rect2:
 	return panel
 
 
-func _draw_choice(rect: Rect2, label: String, selected: bool, font_size: int = 14) -> void:
+func _draw_choice(rect: Rect2, label: String, selected: bool, font_size: int = 14, locked: bool = false) -> void:
 	if rect.size.x <= 0.0:
 		return
-	var fill := ColorTheme.bg_elevated(0.96) if selected else ColorTheme.bg_deep(0.94)
-	var border := ColorTheme.accent(0.9) if selected else ColorTheme.accent(0.4)
+	var fill := ColorTheme.bg_deep(0.7) if locked else (ColorTheme.bg_elevated(0.96) if selected else ColorTheme.bg_deep(0.94))
+	var border := ColorTheme.muted(0.55) if locked else (ColorTheme.accent(0.9) if selected else ColorTheme.accent(0.4))
+	var text_color := ColorTheme.muted() if locked else ColorTheme.text()
 	draw_rect(rect, fill, true, -1.0, true)
 	draw_rect(rect, border, false, 2.0, true)
 	var size := font_size
 	var baseline := rect.position.y + (rect.size.y + _body_font.get_ascent(size) - _body_font.get_descent(size)) * 0.5
-	_draw_centered(_body_font, Vector2(rect.get_center().x, baseline), label, size, ColorTheme.text())
+	_draw_centered(_body_font, Vector2(rect.get_center().x, baseline), label, size, text_color)
 
 
 func _filter_name_live(value: String) -> String:

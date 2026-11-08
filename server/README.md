@@ -68,6 +68,8 @@ Each period and difficulty has its own board (desktop and mobile separated). The
 }
 ```
 
+A score that would rank in the top 10 must include a `replay` object on this same request. Without it the score is rejected. Lower ranks may still omit it and upload later with `POST /api/replays`.
+
 Checksum canonical string (UTF-8, SHA-256, lowercase hex):
 
 ```text

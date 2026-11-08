@@ -112,6 +112,7 @@ game/                 Client (main scene, systems, UI)
 server/               Highscores ASP.NET API + Docker
   scripts/            Ops: verify-highscore, list modes, log tail
 tools/verify/         Headless Godot verifier (excluded from exports)
+tools/bot/            Editor play bot (excluded from the Web export)
 .github/workflows/    Web export → GitHub Pages
 ```
 
@@ -192,6 +193,7 @@ Debug tools are on in the Godot editor, and in a web build opened with `?debug=1
 - FPS counter in the top-left
 - **F1** toggles a dump of local player state (user-data path, API URL, player id, active challenge, `highscore.cfg` and `challenge.cfg`)
 - **F2** clears that local state: deletes those cfg files, leaves the active challenge, and resets the player name, player id, feature announcement, and hard-drop tip
+- **Tab** toggles the editor play bot during a run. **Up / Down** change the bot's own speed. The game level still climbs from line clears. Bot runs do not submit a score. `tools/bot/*` is excluded from the Web export, the same way `tools/verify/*` is.
 
 ---
 

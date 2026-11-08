@@ -184,15 +184,8 @@ var _hard_drop_hint_seen := false
 var _hard_drop_used := false
 var _hard_drop_hint_open := false
 var _hard_drop_hint_resume_rect := Rect2()
-## One-time feature announcements. Stored in user://ui.cfg (IndexedDB in the browser).
-## challenge_friends stays in the file but is not shown. hardcore_level_21 is the live one.
-const ANNOUNCE_CHALLENGE_FRIENDS := "challenge_friends"
-const ANNOUNCE_HARDCORE_LEVEL := "hardcore_level_21"
-var _announce_seen := {
-	"challenge_friends": false,
-	"hardcore_level_21": false,
-}
-var _feature_announce_id := ""
+## One-time "Challenge Friends" feature announcement.
+var _feature_announce_seen := false
 var _feature_announce_open := false
 var _feature_announce_ok_rect := Rect2()
 
@@ -221,7 +214,29 @@ var replay_speed := 1.0
 var replay_total_seconds := 0.0
 ## >0 while replaying: ARR from the recording (legacy files omit it → desktop ARR).
 var _replay_arr_interval := -1.0
+## Editor play bot. The script is loaded only in the editor and excluded from the Web export.
+var _play_bot: Node = null
+var _bot_enabled := false
+## True for the rest of a run once the bot has been turned on. Blocks highscore submit.
+var _bot_disqualified := false
+## How fast the bot moves. Up/Down change this. It does not follow the game level.
+var _bot_pace_level := 1
+## Bumps on each spawn and hold swap so the bot can replan without watching coordinates.
+var bot_piece_serial := 0
 const REPLAY_SPEEDS: Array[float] = [0.5, 1.0, 2.0, 4.0, 8.0]
+const ROTATE_KICKS: Array[Vector2i] = [
+	Vector2i(0, 0),
+	Vector2i(-1, 0),
+	Vector2i(1, 0),
+	Vector2i(-2, 0),
+	Vector2i(2, 0),
+	Vector2i(0, -1),
+	Vector2i(0, 1),
+	Vector2i(-1, -1),
+	Vector2i(1, -1),
+	Vector2i(-2, -1),
+	Vector2i(2, -1),
+]
 ## Best leaderboard place greeted this run (11 = not yet in top 10).
 var _rank_announced := 11
 var leaderboard_greetings := true
@@ -306,6 +321,11 @@ func _set_game_over() -> void:
 		return
 	if replay_recorder != null:
 		replay_recorder.stop()
+	if _bot_disqualified:
+		if music != null and music.has_method("show_status"):
+			music.show_status("Play bot ran. Score was not submitted.")
+		queue_redraw()
+		return
 	if highscores != null:
 		highscores.begin_game_over(score, lines_cleared, level, elapsed_seconds)
 
@@ -328,13 +348,13 @@ func _ready() -> void:
 	_load_hard_drop_hint_prefs()
 	_load_feature_announce_prefs()
 	_layout()
+	_attach_editor_play_bot()
 	_new_game()
 	help_open = false
 	_feature_announce_open = false
 	mode_select_open = true
 	game_mode = ""
-	_feature_announce_id = _pending_feature_announce()
-	if not _feature_announce_id.is_empty():
+	if _should_show_feature_announce():
 		_feature_announce_open = true
 		mode_select_open = false
 	if challenges != null and challenges.is_active():
@@ -500,6 +520,9 @@ func _new_game(seed_override: int = -1) -> void:
 	sim_tick = 0
 	tick_accum = 0.0
 	_rank_announced = 11
+	_bot_disqualified = _bot_enabled
+	if _play_bot != null:
+		_play_bot.clear_plan()
 	if seed_override >= 0:
 		run_seed = seed_override
 	else:
@@ -638,12 +661,8 @@ func _build_editor_debug_dump() -> PackedStringArray:
 		% [str(_hard_drop_hint_seen), str(_hard_drop_used)]
 	)
 	lines.append(
-		"feature_announce: challenge_friends=%s hardcore_level_21=%s open=%s"
-		% [
-			str(bool(_announce_seen.get(ANNOUNCE_CHALLENGE_FRIENDS, false))),
-			str(bool(_announce_seen.get(ANNOUNCE_HARDCORE_LEVEL, false))),
-			str(_feature_announce_open),
-		]
+		"feature_announce_seen: %s  open: %s"
+		% [str(_feature_announce_seen), str(_feature_announce_open)]
 	)
 	if _challenge_active():
 		var data: Dictionary = challenges.active_data()
@@ -700,16 +719,14 @@ func _editor_clear_player_data() -> void:
 	_hard_drop_used = false
 	_save_hard_drop_hint_prefs()
 	_feature_announce_open = false
-	_feature_announce_id = ""
-	_announce_seen[ANNOUNCE_CHALLENGE_FRIENDS] = false
-	_announce_seen[ANNOUNCE_HARDCORE_LEVEL] = false
+	_feature_announce_seen = false
 	_save_feature_announce_prefs()
 	queue_redraw()
 
 
-func _draw_debug_fps(vp: Vector2) -> void:
+func _draw_debug_fps(vp: Vector2) -> Rect2:
 	if not _debug_tools_unlocked() or body_font == null:
-		return
+		return Rect2()
 	var label := "%d FPS" % Engine.get_frames_per_second()
 	var size := maxi(12, int(round(14 * ui_scale)))
 	var pad := 8.0 * ui_scale
@@ -728,6 +745,36 @@ func _draw_debug_fps(vp: Vector2) -> void:
 		-1,
 		size,
 		ColorTheme.gold()
+	)
+	return rect
+
+
+func _draw_play_bot_badge(vp: Vector2, fps_rect: Rect2) -> void:
+	if _play_bot == null or body_font == null:
+		return
+	var label := "BOT off"
+	if _bot_enabled:
+		label = "BOT on  L%d  spd %d" % [level, _bot_pace_level]
+	var size := maxi(12, int(round(14 * ui_scale)))
+	var pad := 8.0 * ui_scale
+	var text_w := body_font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x
+	var text_h := body_font.get_ascent(size) + body_font.get_descent(size)
+	var origin := Vector2(10.0, 10.0)
+	if fps_rect.size.x > 0.0:
+		origin = Vector2(fps_rect.end.x + 8.0, fps_rect.position.y)
+	var rect := Rect2(origin, Vector2(text_w + pad * 2.0, text_h + pad))
+	if rect.end.x > vp.x - 10.0:
+		rect.position.x = maxf(10.0, vp.x - rect.size.x - 10.0)
+	draw_rect(rect, ColorTheme.bg_panel(0.9), true, -1.0, true)
+	draw_rect(rect, ColorTheme.accent(0.55) if _bot_enabled else ColorTheme.muted(), false, 1.5, true)
+	draw_string(
+		body_font,
+		Vector2(rect.position.x + pad, rect.position.y + pad * 0.5 + body_font.get_ascent(size)),
+		label,
+		HORIZONTAL_ALIGNMENT_LEFT,
+		-1,
+		size,
+		ColorTheme.gold() if _bot_enabled else ColorTheme.muted()
 	)
 
 
@@ -1063,6 +1110,7 @@ func _refill_bag() -> void:
 
 
 func _spawn_next() -> void:
+	bot_piece_serial += 1
 	while queue.size() < 5:
 		if bag.is_empty():
 			_refill_bag()
@@ -1111,20 +1159,7 @@ func _try_rotate(dir: int) -> void:
 	var next_rot := (piece_rot + dir) % shapes.size()
 	if next_rot < 0:
 		next_rot += shapes.size()
-	var kicks := [
-		Vector2i(0, 0),
-		Vector2i(-1, 0),
-		Vector2i(1, 0),
-		Vector2i(-2, 0),
-		Vector2i(2, 0),
-		Vector2i(0, -1),
-		Vector2i(0, 1),
-		Vector2i(-1, -1),
-		Vector2i(1, -1),
-		Vector2i(-2, -1),
-		Vector2i(2, -1),
-	]
-	for k in kicks:
+	for k in ROTATE_KICKS:
 		if _valid(piece_pos + k, next_rot):
 			piece_pos += k
 			piece_rot = next_rot
@@ -1328,50 +1363,23 @@ func _dismiss_hard_drop_hint() -> void:
 	queue_redraw()
 
 
-func _challenge_friends_announce_enabled() -> bool:
-	## Private-board announcement is kept, but not shown.
-	return false
-
-
 func _load_feature_announce_prefs() -> void:
-	_announce_seen[ANNOUNCE_CHALLENGE_FRIENDS] = false
-	_announce_seen[ANNOUNCE_HARDCORE_LEVEL] = false
+	_feature_announce_seen = false
 	var cfg := ConfigFile.new()
 	if cfg.load(UI_CONFIG_PATH) != OK:
 		return
-	_announce_seen[ANNOUNCE_CHALLENGE_FRIENDS] = bool(
-		cfg.get_value("announcements", ANNOUNCE_CHALLENGE_FRIENDS, false)
-	)
-	_announce_seen[ANNOUNCE_HARDCORE_LEVEL] = bool(
-		cfg.get_value("announcements", ANNOUNCE_HARDCORE_LEVEL, false)
-	)
+	_feature_announce_seen = bool(cfg.get_value("announcements", "challenge_friends", false))
 
 
 func _save_feature_announce_prefs() -> void:
 	var cfg := ConfigFile.new()
 	cfg.load(UI_CONFIG_PATH)
-	cfg.set_value(
-		"announcements",
-		ANNOUNCE_CHALLENGE_FRIENDS,
-		bool(_announce_seen.get(ANNOUNCE_CHALLENGE_FRIENDS, false))
-	)
-	cfg.set_value(
-		"announcements",
-		ANNOUNCE_HARDCORE_LEVEL,
-		bool(_announce_seen.get(ANNOUNCE_HARDCORE_LEVEL, false))
-	)
+	cfg.set_value("announcements", "challenge_friends", _feature_announce_seen)
 	cfg.save(UI_CONFIG_PATH)
 
 
-func _pending_feature_announce() -> String:
-	if (
-		_challenge_friends_announce_enabled()
-		and not bool(_announce_seen.get(ANNOUNCE_CHALLENGE_FRIENDS, false))
-	):
-		return ANNOUNCE_CHALLENGE_FRIENDS
-	if not bool(_announce_seen.get(ANNOUNCE_HARDCORE_LEVEL, false)):
-		return ANNOUNCE_HARDCORE_LEVEL
-	return ""
+func _should_show_feature_announce() -> bool:
+	return not _feature_announce_seen
 
 
 func _dismiss_feature_announce() -> void:
@@ -1379,10 +1387,9 @@ func _dismiss_feature_announce() -> void:
 		return
 	_feature_announce_open = false
 	_feature_announce_ok_rect = Rect2()
-	if not _feature_announce_id.is_empty() and not bool(_announce_seen.get(_feature_announce_id, false)):
-		_announce_seen[_feature_announce_id] = true
+	if not _feature_announce_seen:
+		_feature_announce_seen = true
 		_save_feature_announce_prefs()
-	_feature_announce_id = ""
 	mode_select_open = true
 	_sync_hold_flags_from_input()
 	queue_redraw()
@@ -1412,23 +1419,11 @@ func _handle_feature_announce_input(event: InputEvent) -> bool:
 	return true
 
 
-func _feature_announce_title() -> String:
-	if _feature_announce_id == ANNOUNCE_CHALLENGE_FRIENDS:
-		return "NEW FEATURE"
-	return "HARDCORE"
-
-
 func _feature_announce_paragraphs() -> PackedStringArray:
-	if _feature_announce_id == ANNOUNCE_CHALLENGE_FRIENDS:
-		return PackedStringArray([
-			"Challenge your friends with a private board.",
-			"Create a challenge, share the invite link, and compete on the same rules and difficulty.",
-			"Open it from the game mode screen with CHALLENGE YOUR FRIENDS.",
-		])
 	return PackedStringArray([
-		"Hardcore difficulty now reaches level 21.",
-		"Gravity keeps climbing until one cell per tick, then holds.",
-		"Classic is unchanged and still caps at level 15.",
+		"Challenge your friends with a private board.",
+		"Create a challenge, share the invite link, and compete on the same rules and difficulty.",
+		"Open it from the game mode screen with CHALLENGE YOUR FRIENDS.",
 	])
 
 
@@ -1525,7 +1520,7 @@ func _draw_feature_announce(vp: Vector2) -> void:
 	var title_y := panel.position.y + pad_top + title_font.get_ascent(title_size_local)
 	_draw_centered_label(
 		mid,
-		_feature_announce_title(),
+		"NEW FEATURE",
 		title_font,
 		title_size_local,
 		ColorTheme.accent(),
@@ -1870,6 +1865,7 @@ func _hold() -> void:
 		lock_resets = 0
 		if not _valid(piece_pos, piece_rot):
 			_set_game_over()
+		bot_piece_serial += 1
 	queue_redraw()
 
 
@@ -1891,6 +1887,36 @@ func _drop_interval() -> float:
 	if _max_level() <= GameModes.MAX_LEVEL_CLASSIC:
 		return maxf(0.05, raw)
 	return raw
+
+
+func bot_cell_list(pid: String, rot: int, origin: Vector2i) -> Array[Vector2i]:
+	return _cells(pid, rot, origin)
+
+
+func bot_rotation_count(pid: String) -> int:
+	if not PIECES.has(pid):
+		return 0
+	return (PIECES[pid] as Array).size()
+
+
+func bot_placement_valid(origin: Vector2i, rot: int, pid: String) -> bool:
+	return _valid(origin, rot, pid)
+
+
+func bot_kicks() -> Array[Vector2i]:
+	return ROTATE_KICKS
+
+
+## Ticks that still belong to the bot before this tick's gravity step moves the piece.
+func bot_drop_interval() -> float:
+	return _drop_interval()
+
+
+func bot_ticks_before_gravity() -> int:
+	var until_drop := _drop_interval() - (drop_timer + TICK_DT)
+	if until_drop <= 0.0:
+		return 0
+	return int(floor(until_drop / TICK_DT)) + 1
 
 
 func _highscores_open() -> bool:
@@ -1938,6 +1964,8 @@ func _process(delta: float) -> void:
 		tick_accum -= TICK_DT
 		if replay_mode and replay_player != null:
 			replay_player.inject_for_tick(sim_tick, self)
+		elif _bot_enabled and _play_bot != null:
+			_play_bot.step(self)
 		_sim_tick()
 		sim_tick += 1
 		guard += 1
@@ -2408,6 +2436,86 @@ func _handle_replay_keys(event: InputEvent) -> bool:
 	return false
 
 
+func _attach_editor_play_bot() -> void:
+	if not OS.has_feature("editor"):
+		return
+	# Built at runtime so the Web export has no script dependency to pack.
+	var path := "res://tools/%s/%s.gd" % ["bot", "player_bot"]
+	if not ResourceLoader.exists(path):
+		return
+	var bot_script = load(path)
+	if bot_script == null:
+		return
+	var bot := Node.new()
+	bot.set_script(bot_script)
+	bot.name = "PlayBot"
+	add_child(bot)
+	_play_bot = bot
+
+
+func _try_toggle_play_bot(event: InputEvent) -> bool:
+	if _play_bot == null or not _key_pressed(event, KEY_TAB):
+		return false
+	if (
+		mode_select_open
+		or options_open
+		or help_open
+		or score_open
+		or _awaiting_mode()
+		or _highscores_open()
+		or _challenge_overlay_open()
+	):
+		return false
+	_bot_enabled = not _bot_enabled
+	if _bot_enabled:
+		_bot_disqualified = true
+		_release_held_moves_for_focus_loss()
+	elif _play_bot != null:
+		_play_bot.clear_plan()
+	if music != null and music.has_method("show_status"):
+		music.show_status("Play bot on" if _bot_enabled else "Play bot off")
+	queue_redraw()
+	return true
+
+
+func bot_pace_level() -> int:
+	return _bot_pace_level
+
+
+func _try_step_bot_level(event: InputEvent) -> bool:
+	if not _bot_enabled or _play_bot == null:
+		return false
+	var delta := 0
+	if _key_pressed(event, KEY_UP):
+		delta = 1
+	elif _key_pressed(event, KEY_DOWN):
+		delta = -1
+	else:
+		return false
+	_bot_pace_level = clampi(_bot_pace_level + delta, 1, _max_level())
+	if _play_bot.has_method("refresh_pace"):
+		_play_bot.refresh_pace(self)
+	if music != null and music.has_method("show_status"):
+		music.show_status("Bot speed %d" % _bot_pace_level)
+	queue_redraw()
+	return true
+
+
+func _bot_swallows_gameplay(event: InputEvent) -> bool:
+	return (
+		Keybinds.matches_pressed(event, Keybinds.MOVE_LEFT)
+		or Keybinds.matches_released(event, Keybinds.MOVE_LEFT)
+		or Keybinds.matches_pressed(event, Keybinds.MOVE_RIGHT)
+		or Keybinds.matches_released(event, Keybinds.MOVE_RIGHT)
+		or Keybinds.matches_pressed(event, Keybinds.SOFT_DROP)
+		or Keybinds.matches_released(event, Keybinds.SOFT_DROP)
+		or Keybinds.matches_pressed(event, Keybinds.ROTATE)
+		or Keybinds.matches_pressed(event, Keybinds.ROTATE_CCW)
+		or Keybinds.matches_pressed(event, Keybinds.HARD_DROP)
+		or Keybinds.matches_pressed(event, Keybinds.HOLD)
+	)
+
+
 func _key_pressed(event: InputEvent, code: Key) -> bool:
 	if not (event is InputEventKey and event.pressed and not event.echo):
 		return false
@@ -2834,6 +2942,9 @@ func _input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		return
 	if game_over:
+		if _try_toggle_play_bot(event) or _try_step_bot_level(event):
+			get_viewport().set_input_as_handled()
+			return
 		if Keybinds.matches_pressed(event, Keybinds.HARD_DROP):
 			if not _awaiting_mode():
 				_start_player_run()
@@ -2842,6 +2953,12 @@ func _input(event: InputEvent) -> void:
 	# Hold releases must never be dropped: missing OFF leaves DAS stuck after clear/UI/pause.
 	# Presses during line-clear are allowed so DAS can charge through ARE; discrete moves stay blocked.
 	var overlay_blocks_play := _overlay_blocks_play()
+	if not overlay_blocks_play and (_try_toggle_play_bot(event) or _try_step_bot_level(event)):
+		get_viewport().set_input_as_handled()
+		return
+	if _bot_enabled and not overlay_blocks_play and _bot_swallows_gameplay(event):
+		get_viewport().set_input_as_handled()
+		return
 	if _handle_hold_action_event(event, not overlay_blocks_play):
 		get_viewport().set_input_as_handled()
 		return
@@ -2926,7 +3043,7 @@ func _handle_discrete_gameplay_action_event(event: InputEvent) -> bool:
 
 ## Live-only: align hold flags with the keyboard after UI/focus gaps (records via apply_action).
 func _sync_hold_flags_from_input() -> void:
-	if replay_mode or game_over:
+	if replay_mode or game_over or _bot_enabled:
 		return
 	_sync_hold_flag(Keybinds.MOVE_LEFT, held_left, ReplayActions.LEFT_ON, ReplayActions.LEFT_OFF)
 	_sync_hold_flag(Keybinds.MOVE_RIGHT, held_right, ReplayActions.RIGHT_ON, ReplayActions.RIGHT_OFF)
@@ -2972,7 +3089,8 @@ func _draw() -> void:
 	_draw_side_panels()
 	_draw_hud()
 	_draw_overlays(vp)
-	_draw_debug_fps(vp)
+	var fps_rect := _draw_debug_fps(vp)
+	_draw_play_bot_badge(vp, fps_rect)
 	_draw_editor_debug(vp)
 
 
@@ -4390,5 +4508,14 @@ func _draw_overlays(vp: Vector2) -> void:
 					else "R / Space / Enter restart    Esc / Q quit"
 				)
 				_draw_centered_label(center, over_hint, body_font, 20, ColorTheme.text(), 18.0)
+			if _bot_disqualified:
+				_draw_centered_label(
+					center,
+					"Play bot ran. Score was not submitted.",
+					body_font,
+					18,
+					ColorTheme.muted(),
+					52.0
+				)
 	elif game_over and replay_mode:
 		_draw_stack_full_banner(center, 0.0)
