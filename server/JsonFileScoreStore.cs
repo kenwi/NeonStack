@@ -116,8 +116,15 @@ public sealed class JsonFileScoreStore
                 }
 
                 Directory.CreateDirectory(_replayDir);
-                await File.WriteAllTextAsync(ReplayPath(checksum), replayJson, cancellationToken);
+                var replayPath = ReplayPath(checksum);
+                await File.WriteAllTextAsync(replayPath, replayJson, cancellationToken);
                 newEntry.HasReplay = true;
+                _logger.LogInformation(
+                    "Replay attached: Checksum={Checksum}, ModeId={ModeId}, Bytes={Bytes}, Path={Path}",
+                    checksum,
+                    submission.ModeId,
+                    System.Text.Encoding.UTF8.GetByteCount(replayJson),
+                    replayPath);
             }
 
             entries.Add(newEntry);
