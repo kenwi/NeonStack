@@ -20,4 +20,6 @@ server/bin/
 server/obj/
 server/logs/
 server/highscores-dev.json
+tools/bot/logs/
+tools/bot/__pycache__/
 

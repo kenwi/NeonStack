@@ -1,0 +1,358 @@
+#!/usr/bin/env python3
+"""Plot headless bot scores over time.
+
+Reads JSONL logs written by tools/bot/headless_bot.gd. A run is drawn only
+when it finished (an event named "lost"). Unfinished logs are skipped.
+
+Examples:
+  plot-logs
+  plot-logs tools/bot/logs/20261109T212034_seed1_w1794403473.jsonl
+  plot-logs --x sim --save ~/bot-scores.png
+  plot-logs --theme light
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
+
+# Same dark series colors as server/scripts/highscore-stats.
+SERIES_PALETTE_DARK = [
+    "#5eb1ff",
+    "#ff9a5c",
+    "#5bd68a",
+    "#ff6b4a",
+    "#c792ea",
+    "#4dd0e1",
+    "#ff80ab",
+    "#bcaaa4",
+    "#64ffda",
+    "#ffcc80",
+    "#9fa8da",
+    "#ffd54f",
+]
+SERIES_PALETTE_LIGHT = [
+    "#3aa0ff",
+    "#ff7a3a",
+    "#2bb673",
+    "#e4572e",
+    "#9b59b6",
+    "#17a2b8",
+    "#e91e63",
+    "#8d6e63",
+    "#00bfa5",
+    "#f4a261",
+    "#5c6bc0",
+    "#d4a017",
+]
+
+LOG_DIR = Path(__file__).resolve().parent / "logs"
+
+
+@dataclass
+class Sample:
+    x: float
+    score: int
+
+
+@dataclass
+class Run:
+    path: Path
+    run_id: str
+    difficulty: str
+    seed: int
+    weight_seed: int
+    weights: dict[str, float] = field(default_factory=dict)
+    samples: list[Sample] = field(default_factory=list)
+    final_score: int = 0
+
+    @property
+    def label(self) -> str:
+        weight = "default" if self.weight_seed < 0 else f"w{self.weight_seed}"
+        return f"{weight}  {fmt_score(self.final_score)}"
+
+
+def fmt_score(value: float | int) -> str:
+    return f"{int(round(value)):,}".replace(",", " ")
+
+
+def fmt_duration(seconds: float, _pos: object = None) -> str:
+    """Axis label: 0.8s, 45s, 12m, 1m 30s, 2h, 1h 05m."""
+    if seconds < 0:
+        seconds = 0.0
+    if seconds < 10:
+        text = f"{seconds:.1f}".rstrip("0").rstrip(".")
+        return f"{text}s"
+    total = int(round(seconds))
+    hours, rem = divmod(total, 3600)
+    minutes, secs = divmod(rem, 60)
+    if hours:
+        return f"{hours}h {minutes:02d}m" if minutes else f"{hours}h"
+    if minutes:
+        return f"{minutes}m {secs:02d}s" if secs else f"{minutes}m"
+    return f"{secs}s"
+
+
+def load_run(path: Path, x_key: str) -> Run | None:
+    """Return a finished run, or None when the log never reached lost."""
+    samples: list[Sample] = []
+    lost = False
+    run_id = path.stem
+    difficulty = ""
+    seed = 0
+    weight_seed = -1
+    weights: dict[str, float] = {}
+    final_score = 0
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        record = json.loads(line)
+        if not isinstance(record, dict):
+            continue
+        event = str(record.get("event", "")).lower()
+        if event == "lost":
+            lost = True
+        if event not in ("start", "stat", "lost"):
+            continue
+        run_id = str(record.get("run_id") or run_id)
+        difficulty = str(record.get("difficulty") or difficulty)
+        seed = int(record.get("seed") or seed)
+        weight_seed = int(record.get("weight_seed") if record.get("weight_seed") is not None else weight_seed)
+        raw_weights = record.get("weights") or {}
+        if isinstance(raw_weights, dict) and raw_weights:
+            weights = {str(k): float(v) for k, v in raw_weights.items()}
+        score = int(record.get("score") or 0)
+        if event == "lost":
+            final_score = score
+        samples.append(Sample(x=float(record.get(x_key) or 0.0), score=score))
+    if not lost or not samples:
+        return None
+    samples.sort(key=lambda sample: sample.x)
+    return Run(
+        path=path,
+        run_id=run_id,
+        difficulty=difficulty or "?",
+        seed=seed,
+        weight_seed=weight_seed,
+        weights=weights,
+        samples=samples,
+        final_score=final_score,
+    )
+
+
+def collect_logs(target: Path) -> list[Path]:
+    if target.is_file():
+        return [target]
+    if not target.is_dir():
+        raise FileNotFoundError(target)
+    return sorted(target.glob("*.jsonl"))
+
+
+def apply_plot_theme(fig, ax, theme: str) -> list[str]:
+    """Match highscore-stats light/dark theming. Returns the series palette."""
+    if theme == "dark":
+        bg, panel, text, grid = "#12141a", "#1a1d26", "#e8eaed", "#3c4048"
+        palette = SERIES_PALETTE_DARK
+    else:
+        bg, panel, text, grid = "#ffffff", "#ffffff", "#202124", "#dadce0"
+        palette = SERIES_PALETTE_LIGHT
+    fig.patch.set_facecolor(bg)
+    ax.set_facecolor(panel)
+    ax.tick_params(colors=text)
+    ax.xaxis.label.set_color(text)
+    ax.yaxis.label.set_color(text)
+    ax.title.set_color(text)
+    for spine in ax.spines.values():
+        spine.set_color(grid)
+    ax.grid(True, alpha=0.35, color=grid)
+    return palette
+
+
+def best_weight_lines(run: Run) -> list[str]:
+    order = ("lines", "holes", "bumpiness", "height")
+    seed = "default" if run.weight_seed < 0 else str(run.weight_seed)
+    lines = [
+        f"Best  {fmt_score(run.final_score)}",
+        f"weight_seed  {seed}",
+    ]
+    seen: set[str] = set()
+    for name in order:
+        if name not in run.weights:
+            continue
+        lines.append(f"{name}  {run.weights[name]:+.4f}")
+        seen.add(name)
+    for name, value in run.weights.items():
+        if name not in seen:
+            lines.append(f"{name}  {value:+.4f}")
+    return lines
+
+
+def _draw_best_weights(ax, run: Run, theme: str) -> None:
+    if theme == "dark":
+        text, face, edge = "#e8eaed", "#1a1d26", "#3c4048"
+    else:
+        text, face, edge = "#202124", "#ffffff", "#dadce0"
+    ax.text(
+        0.98,
+        0.04,
+        "\n".join(best_weight_lines(run)),
+        transform=ax.transAxes,
+        ha="right",
+        va="bottom",
+        color=text,
+        fontsize=10,
+        family="monospace",
+        bbox={
+            "boxstyle": "round,pad=0.45",
+            "facecolor": face,
+            "edgecolor": edge,
+            "alpha": 0.92,
+        },
+    )
+
+
+def style_legend(legend, theme: str) -> None:
+    if theme != "dark":
+        return
+    legend.get_frame().set_facecolor("#1a1d26")
+    legend.get_frame().set_edgecolor("#3c4048")
+    for text in legend.get_texts():
+        text.set_color("#e8eaed")
+
+
+def plot_runs(
+    runs: list[Run],
+    *,
+    x_key: str,
+    theme: str,
+    save_path: Path | None,
+    show: bool,
+) -> Path | None:
+    import matplotlib
+
+    want_show = show and save_path is None and bool(
+        os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
+    )
+    if not want_show:
+        matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.ticker import FuncFormatter
+
+    fig, ax = plt.subplots(figsize=(11, 5.5))
+    palette = apply_plot_theme(fig, ax, theme)
+    for index, run in enumerate(runs):
+        color = palette[index % len(palette)]
+        ax.plot(
+            [sample.x for sample in run.samples],
+            [sample.score for sample in run.samples],
+            color=color,
+            linewidth=1.6,
+            marker="o",
+            markersize=3.5,
+            label=run.label,
+        )
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda value, _pos: fmt_score(value)))
+    ax.xaxis.set_major_formatter(FuncFormatter(fmt_duration))
+    ax.set_xlabel("Wall time" if x_key == "wall_s" else "Simulated time")
+    ax.set_ylabel("Score")
+    noun = "run" if len(runs) == 1 else "runs"
+    ax.set_title(f"Bot score over time ({len(runs)} finished {noun})")
+    legend = ax.legend(loc="upper left", framealpha=0.92)
+    style_legend(legend, theme)
+    _draw_best_weights(ax, max(runs, key=lambda run: run.final_score), theme)
+    fig.tight_layout()
+
+    save_kwargs = {"dpi": 140, "facecolor": fig.get_facecolor()}
+    out_path: Path | None = None
+    if save_path is not None:
+        out_path = save_path.expanduser()
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(out_path, **save_kwargs)
+        print(f"Wrote plot: {out_path}")
+    elif not want_show:
+        out_path = Path("/tmp/bot-scores.png")
+        fig.savefig(out_path, **save_kwargs)
+        print(f"No display; wrote plot: {out_path}")
+    else:
+        plt.show()
+    plt.close(fig)
+    return out_path
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "target",
+        nargs="?",
+        type=Path,
+        default=LOG_DIR,
+        help=f"one JSONL log or a directory of them (default: {LOG_DIR})",
+    )
+    parser.add_argument(
+        "--x",
+        choices=["wall", "sim"],
+        default="wall",
+        help="time axis: wall clock (default) or simulated game time",
+    )
+    parser.add_argument(
+        "--theme",
+        choices=["light", "dark"],
+        default="dark",
+        help="chart theme (default: dark)",
+    )
+    parser.add_argument("--save", type=Path, help="write the chart to this image and do not open a window")
+    parser.add_argument("--no-show", action="store_true", help="do not open a window")
+    args = parser.parse_args()
+
+    try:
+        paths = collect_logs(args.target)
+    except FileNotFoundError:
+        print(f"Not found: {args.target}", file=sys.stderr)
+        return 1
+    if not paths:
+        print(f"No JSONL logs in {args.target}", file=sys.stderr)
+        return 1
+
+    x_key = "wall_s" if args.x == "wall" else "sim_s"
+    runs: list[Run] = []
+    skipped = 0
+    for path in paths:
+        run = load_run(path, x_key)
+        if run is None:
+            skipped += 1
+            continue
+        runs.append(run)
+    if not runs:
+        print(f"No finished runs (skipped {skipped} unfinished log(s)).", file=sys.stderr)
+        return 1
+
+    runs.sort(key=lambda run: run.final_score)
+    axis = "wall" if args.x == "wall" else "sim"
+    print(f"Finished runs: {len(runs)}   skipped unfinished: {skipped}")
+    for run in runs:
+        end = run.samples[-1].x
+        print(f"  {run.label}  {run.difficulty}  seed {run.seed}  {axis} {end:.1f}s")
+        if run.weights:
+            weights = "  ".join(f"{name}={value:+.4f}" for name, value in run.weights.items())
+            print(f"    {weights}")
+
+    plot_runs(
+        runs,
+        x_key=x_key,
+        theme=args.theme,
+        save_path=args.save,
+        show=not args.no_show,
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

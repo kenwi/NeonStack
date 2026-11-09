@@ -5,11 +5,16 @@ extends Node
 
 const ReplayActions = preload("res://game/replay/actions.gd")
 
-## Tunable landing score. Higher is better.
-const WEIGHT_LINES := 1.0
-const WEIGHT_HOLES := -4.5
-const WEIGHT_BUMPINESS := -0.25
-const WEIGHT_HEIGHT := -0.45
+## Tunable landing score. Higher is better. These are the live-editor defaults.
+const DEFAULT_WEIGHT_LINES := 1.0
+const DEFAULT_WEIGHT_HOLES := -4.5
+const DEFAULT_WEIGHT_BUMPINESS := -0.25
+const DEFAULT_WEIGHT_HEIGHT := -0.45
+## Random draws keep the same signs: reward lines, penalize the rest.
+const RANDOM_LINES := Vector2(0.2, 3.0)
+const RANDOM_HOLES := Vector2(-10.0, -0.5)
+const RANDOM_BUMPINESS := Vector2(-2.0, -0.05)
+const RANDOM_HEIGHT := Vector2(-2.0, -0.05)
 ## Level 1 waits a full second between moves. Each higher level trims this by four ticks.
 const PACE_LEVEL1_TICKS := 60
 const PACE_PER_LEVEL := 4
@@ -20,6 +25,35 @@ var _actions: Array[String] = []
 var _wait := 0
 var _planned_serial := -1
 var _plan_y := -999
+var weight_lines := DEFAULT_WEIGHT_LINES
+var weight_holes := DEFAULT_WEIGHT_HOLES
+var weight_bumpiness := DEFAULT_WEIGHT_BUMPINESS
+var weight_height := DEFAULT_WEIGHT_HEIGHT
+
+
+func weights() -> Dictionary:
+	return {
+		"lines": weight_lines,
+		"holes": weight_holes,
+		"bumpiness": weight_bumpiness,
+		"height": weight_height,
+	}
+
+
+func randomize_weights(rng: RandomNumberGenerator) -> void:
+	weight_lines = _snap_weight(rng.randf_range(RANDOM_LINES.x, RANDOM_LINES.y))
+	weight_holes = _snap_weight(rng.randf_range(RANDOM_HOLES.x, RANDOM_HOLES.y))
+	weight_bumpiness = _snap_weight(rng.randf_range(RANDOM_BUMPINESS.x, RANDOM_BUMPINESS.y))
+	weight_height = _snap_weight(rng.randf_range(RANDOM_HEIGHT.x, RANDOM_HEIGHT.y))
+
+
+func _snap_weight(value: float) -> float:
+	return snapped(value, 0.0001)
+
+
+## Pace level whose wait is one sim tick. Headless runs use this as max speed.
+func max_pace_level() -> int:
+	return 1 + int(ceil(float(PACE_LEVEL1_TICKS - 1) / float(PACE_PER_LEVEL)))
 
 
 func clear_plan() -> void:
@@ -282,8 +316,8 @@ func _score_landing(main: Node, pid: String, origin: Vector2i, rot: int) -> floa
 	for i in heights.size() - 1:
 		bumpiness += absi(heights[i] - heights[i + 1])
 	return (
-		float(cleared) * WEIGHT_LINES
-		+ float(holes) * WEIGHT_HOLES
-		+ float(bumpiness) * WEIGHT_BUMPINESS
-		+ float(height_sum) * WEIGHT_HEIGHT
+		float(cleared) * weight_lines
+		+ float(holes) * weight_holes
+		+ float(bumpiness) * weight_bumpiness
+		+ float(height_sum) * weight_height
 	)
