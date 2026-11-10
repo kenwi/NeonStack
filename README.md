@@ -197,7 +197,7 @@ Debug tools are on in the Godot editor, and in a web build opened with `?debug=1
 
 Headless bot, same rules as a live run but without waiting on the frame clock. The bot uses its fastest in-game pace: one move per tick, and a whole placement in one tick only once gravity is already that fast. The game level still climbs from line clears. A line prints at the start, on a wall-clock interval (default 60 seconds, `--every` changes it), and when the run loses. `--quiet` is a Godot flag and hides the engine version line. Progress is printed on stderr so it still shows.
 
-`--random-weights` draws a new heuristic (lines stay positive, the other three stay penalties) and prints the values. Each run also writes a JSON line log under `tools/bot/logs/` (override with `--log`) with the weights and every progress sample. `tools/bot/plot-logs` charts score over time for one log or the whole directory. Only runs that reached `lost` are drawn. The chart uses the same dark theme as `highscore-stats`.
+`--random-weights` draws a new heuristic (lines stay positive, the other three stay penalties) and prints the values. Each run also writes a JSON line log under `tools/bot/logs/` (override with `--log`) with the weights and every progress sample. `tools/bot/plot-logs` charts score over time for one log or the whole directory, including runs that are still going. The chart uses the same dark theme as `highscore-stats`.
 
 ```bash
 godot --headless --quiet --path . --script res://tools/bot/headless_bot.gd -- --every 30

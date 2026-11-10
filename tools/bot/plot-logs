@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Plot headless bot scores over time.
 
-Reads JSONL logs written by tools/bot/headless_bot.gd. A run is drawn only
-when it finished (an event named "lost"). Unfinished logs are skipped.
+Reads JSONL logs written by tools/bot/headless_bot.gd. Finished runs and
+runs that are still in progress are both drawn. Logs with no score sample yet
+are skipped.
 
 Examples:
   plot-logs
@@ -69,11 +70,13 @@ class Run:
     weights: dict[str, float] = field(default_factory=dict)
     samples: list[Sample] = field(default_factory=list)
     final_score: int = 0
+    finished: bool = False
 
     @property
     def label(self) -> str:
         weight = "default" if self.weight_seed < 0 else f"w{self.weight_seed}"
-        return f"{weight}  {fmt_score(self.final_score)}"
+        state = "" if self.finished else "  running"
+        return f"{weight}  {fmt_score(self.final_score)}{state}"
 
 
 def fmt_score(value: float | int) -> str:
@@ -98,9 +101,10 @@ def fmt_duration(seconds: float, _pos: object = None) -> str:
 
 
 def load_run(path: Path, x_key: str) -> Run | None:
-    """Return a finished run, or None when the log never reached lost."""
+    """Return a run that has score samples. Start-only logs are skipped."""
     samples: list[Sample] = []
     lost = False
+    saw_score = False
     run_id = path.stem
     difficulty = ""
     seed = 0
@@ -127,10 +131,11 @@ def load_run(path: Path, x_key: str) -> Run | None:
         if isinstance(raw_weights, dict) and raw_weights:
             weights = {str(k): float(v) for k, v in raw_weights.items()}
         score = int(record.get("score") or 0)
-        if event == "lost":
+        if event in ("stat", "lost"):
+            saw_score = True
             final_score = score
         samples.append(Sample(x=float(record.get(x_key) or 0.0), score=score))
-    if not lost or not samples:
+    if not saw_score or not samples:
         return None
     samples.sort(key=lambda sample: sample.x)
     return Run(
@@ -142,6 +147,7 @@ def load_run(path: Path, x_key: str) -> Run | None:
         weights=weights,
         samples=samples,
         final_score=final_score,
+        finished=lost,
     )
 
 
@@ -261,7 +267,7 @@ def plot_runs(
     ax.set_xlabel("Wall time" if x_key == "wall_s" else "Simulated time")
     ax.set_ylabel("Score")
     noun = "run" if len(runs) == 1 else "runs"
-    ax.set_title(f"Bot score over time ({len(runs)} finished {noun})")
+    ax.set_title(f"Bot score over time ({len(runs)} {noun})")
     legend = ax.legend(loc="upper left", framealpha=0.92)
     style_legend(legend, theme)
     _draw_best_weights(ax, max(runs, key=lambda run: run.final_score), theme)
@@ -331,12 +337,13 @@ def main() -> int:
             continue
         runs.append(run)
     if not runs:
-        print(f"No finished runs (skipped {skipped} unfinished log(s)).", file=sys.stderr)
+        print(f"No runs with score samples (skipped {skipped} empty log(s)).", file=sys.stderr)
         return 1
 
     runs.sort(key=lambda run: run.final_score)
     axis = "wall" if args.x == "wall" else "sim"
-    print(f"Finished runs: {len(runs)}   skipped unfinished: {skipped}")
+    finished = sum(1 for run in runs if run.finished)
+    print(f"Runs: {len(runs)}   finished: {finished}   still running: {len(runs) - finished}   skipped empty: {skipped}")
     for run in runs:
         end = run.samples[-1].x
         print(f"  {run.label}  {run.difficulty}  seed {run.seed}  {axis} {end:.1f}s")
