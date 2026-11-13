@@ -1379,6 +1379,8 @@ func _save_feature_announce_prefs() -> void:
 
 
 func _should_show_feature_announce() -> bool:
+	# Disabled: never show for any user.
+	return false
 	return not _feature_announce_seen
 
 
